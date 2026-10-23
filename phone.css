@@ -1,0 +1,170 @@
+/* Phone/tablet layout on top of the shared TV styles (style.css, whose vh/vw sizes are rewritten
+   to cqh/cqw at build time so they follow the TV box, not the whole screen). */
+
+:root {
+  --plastic: #1b1d22;
+  --plastic-2: #26292f;
+  --key: #31353d;
+  --key-ink: #e8eaf0;
+  --accent: #ffcc33;
+  --accent-ink: #1a1400;
+  --panel: #15171c;
+  --panel-2: #1f2229;
+  --line: #2d313a;
+  --muted: #9aa3b5;
+  --bad: #f87171;
+  --good: #4ade80;
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+}
+
+html, body { cursor: auto; -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none; }
+body { background: #000; overscroll-behavior: none; touch-action: manipulation; }
+button { font: inherit; color: inherit; cursor: pointer; }
+
+/* ---------- The TV box ---------- */
+#tv {
+  position: relative; inset: auto; width: 100vw; aspect-ratio: 4 / 3; max-height: 62vh;
+  margin: var(--safe-t) auto 0; container-type: size;
+}
+@media (orientation: landscape) {
+  #tv { position: fixed; inset: 0; width: auto; max-height: none; aspect-ratio: auto; margin: 0; }
+}
+#screen iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #000; }
+
+/* The glass doubles as the swipe/tap surface, except on live channels, where taps belong to
+   the site's own player. */
+#crt { touch-action: none; }
+body.live-on #crt { pointer-events: none; }
+
+#power-on {
+  position: absolute; inset: 0; z-index: 110; border: 0; background: #000; color: #39ff4f;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4cqh;
+  font-family: 'VCR', monospace; font-size: 7cqh; letter-spacing: 0.1em;
+  text-shadow: 0 0 1cqh rgba(57, 255, 79, 0.7);
+}
+#power-on .knob {
+  width: 18cqh; height: 18cqh; border-radius: 50%; border: 1cqh solid #39ff4f; position: relative;
+  box-shadow: 0 0 2cqh rgba(57, 255, 79, 0.5);
+}
+#power-on .knob::after {
+  content: ''; position: absolute; left: 50%; top: -3cqh; width: 1.4cqh; height: 10cqh;
+  background: #39ff4f; transform: translateX(-50%); border-radius: 1cqh; box-shadow: 0 0 0 1cqh #000;
+}
+#tap-play {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 60;
+  background: rgba(0, 0, 0, 0.8); border: 0.5cqh solid #39ff4f; color: #39ff4f; border-radius: 2cqh;
+  padding: 3cqh 6cqw; font-family: 'VCR', monospace; font-size: 7cqh;
+}
+
+/* PIN pad and profile picker */
+#menu { z-index: 70; min-width: 70cqw; max-height: 92cqh; overflow: auto; padding: 3cqh 4cqw; }
+#menu h2 { font-size: 7cqh; margin-bottom: 1cqh; }
+#menu .pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.5cqh; margin: 2cqh auto; max-width: 60cqh; }
+#menu button {
+  background: #0b2a10; border: 0.3cqh solid #39ff4f; color: #39ff4f; border-radius: 1.5cqh;
+  font-family: 'VCR', monospace; font-size: 6cqh; padding: 1cqh 0;
+}
+#menu button.choice { display: block; width: 100%; margin: 1.5cqh 0; padding: 1.5cqh 2cqw; }
+#menu button.hint { border: 0; background: none; font-size: 4cqh; color: #9c9; margin-top: 1cqh; }
+
+/* ---------- The remote ---------- */
+#remote {
+  margin: 2.5vh auto 0; padding: 14px 16px calc(14px + var(--safe-b));
+  width: min(100vw, 520px); background: linear-gradient(var(--plastic-2), var(--plastic));
+  border-radius: 26px 26px 0 0; box-shadow: 0 -2px 0 #3a3e47 inset;
+  display: flex; flex-direction: column; gap: 12px; user-select: none;
+}
+#remote .rows { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+#remote .keypad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+#remote .keypad .zero { grid-column: 2; }
+#remote button {
+  background: var(--key); color: var(--key-ink); border: 0; border-radius: 12px; padding: 12px 0;
+  font-family: 'VCR', monospace; font-size: 22px; letter-spacing: 0.04em;
+  box-shadow: 0 3px 0 #15171b; transition: transform 0.05s;
+}
+#remote button:active { transform: translateY(2px); box-shadow: 0 1px 0 #15171b; }
+#remote button.big { font-size: 26px; padding: 16px 0; }
+#remote button.accent { background: var(--accent); color: var(--accent-ink); }
+
+@media (orientation: landscape) {
+  #remote {
+    position: fixed; z-index: 150; right: calc(10px + var(--safe-r)); top: 50%; transform: translateY(-50%);
+    width: 260px; margin: 0; padding: 12px; border-radius: 20px; background: rgba(20, 22, 26, 0.88);
+    opacity: 0; pointer-events: none; transition: opacity 0.25s;
+  }
+  #remote .keypad { display: none; }
+  #remote button { font-size: 18px; padding: 10px 0; }
+  #remote button.big { font-size: 20px; padding: 12px 0; }
+  body.remote-up #remote { opacity: 1; pointer-events: auto; }
+  /* On live channels taps go to the player, so keep a small remote on screen. */
+  body.live-on #remote { opacity: 0.55; pointer-events: auto; width: 150px; }
+  body.live-on #remote .rows { grid-template-columns: 1fr 1fr; }
+  body.live-on #remote .rows button:not(.big):not(.accent):not([data-act='guide']) { display: none; }
+}
+
+/* ---------- Menu (manage) ---------- */
+#manage {
+  position: fixed; inset: 0; z-index: 200; background: var(--panel); color: #e8eaf0;
+  display: flex; flex-direction: column; font: 15px/1.45 -apple-system, 'Segoe UI', system-ui, sans-serif;
+  padding: var(--safe-t) var(--safe-r) 0 var(--safe-l); cursor: auto; user-select: text;
+}
+#manage header { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); background: var(--panel-2); }
+#manage header nav { display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; }
+#manage header nav::-webkit-scrollbar { display: none; }
+#manage header button { background: none; border: 1px solid transparent; border-radius: 8px; padding: 6px 10px; color: var(--muted); white-space: nowrap; }
+#manage header button.on { color: #fff; background: var(--panel); border-color: var(--line); }
+#manage header .back { color: var(--accent); font-weight: 600; }
+#manage .panes { flex: 1; min-height: 0; position: relative; }
+#manage .pane { display: none; position: absolute; inset: 0; overflow: auto; -webkit-overflow-scrolling: touch; padding: 14px 14px calc(24px + var(--safe-b)); }
+#manage .pane.on { display: block; }
+#manage h3 { margin: 18px 0 8px; font-size: 13px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+#manage h3:first-child { margin-top: 0; }
+#manage p { margin: 6px 0; }
+#manage .muted { color: var(--muted); font-size: 13px; }
+#manage input, #manage select, #manage textarea {
+  font: inherit; color: inherit; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
+  padding: 9px 10px; width: 100%; -webkit-appearance: none; appearance: none;
+}
+#manage input[type=checkbox] { width: 22px; height: 22px; -webkit-appearance: checkbox; appearance: auto; flex: none; }
+#manage textarea { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; min-height: 110px; }
+#manage label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+#manage label.check { flex-direction: row; align-items: center; gap: 10px; color: #e8eaf0; font-size: 15px; }
+#manage .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+#manage .grid .wide { grid-column: 1 / -1; }
+#manage .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+#manage .btn {
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; font-weight: 600;
+}
+#manage .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+#manage .btn.danger { color: var(--bad); }
+#manage .btn:disabled { opacity: 0.4; }
+#manage .list { display: flex; flex-direction: column; gap: 1px; background: var(--line); border-radius: 12px; overflow: hidden; }
+#manage .item { background: var(--panel-2); padding: 11px 12px; display: flex; gap: 10px; align-items: center; }
+#manage .item .grow { flex: 1; min-width: 0; }
+#manage .item .t { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#manage .item .s { font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#manage .item.tap { cursor: pointer; }
+#manage .item.tap:active { background: #2a2e36; }
+#manage .item img { width: 64px; height: 48px; object-fit: cover; border-radius: 6px; background: #000; flex: none; }
+#manage .badge { font-size: 10px; font-weight: 700; letter-spacing: 0.04em; padding: 2px 6px; border-radius: 4px; text-transform: uppercase; background: #2a2d36; color: var(--muted); white-space: nowrap; }
+#manage .badge.good { background: #10321f; color: var(--good); }
+#manage .badge.warn { background: #3a1e1e; color: var(--bad); }
+#manage .badge.gold { background: #3b2f0a; color: var(--accent); }
+#manage .progress { height: 6px; background: var(--panel-2); border-radius: 3px; overflow: hidden; }
+#manage .progress i { display: block; height: 100%; background: var(--accent); }
+#manage .card { background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+
+#sheet { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.55); z-index: 5; display: flex; align-items: flex-end; }
+#sheet .sheet-box {
+  width: 100%; max-height: 88%; overflow: auto; background: var(--panel); border-radius: 18px 18px 0 0;
+  padding: 16px 14px calc(18px + var(--safe-b)); border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 12px;
+}
+#sheet video { width: 100%; border-radius: 10px; background: #000; }
+#toast {
+  position: absolute; left: 50%; bottom: calc(20px + var(--safe-b)); transform: translateX(-50%); z-index: 6;
+  background: #2a2e36; border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; max-width: 90%; text-align: center;
+}
+#toast.bad { border-color: var(--bad); }

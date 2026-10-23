@@ -1,0 +1,576 @@
+'use strict';
+// The phone TV. Same behaviour as the desktop TV (src/app.js): channels already on when you tune
+// in, static between channels, banner, guide, profiles. Different plumbing: videos come from
+// on-device storage (or stream from the archive), live channels are embedded players, and
+// it's driven by touch.
+
+const $ = (s) => document.querySelector(s);
+const screenEl = $('#screen');
+const localVideo = $('#local');
+
+const store = {
+  get(k, d) {
+    try {
+      const v = localStorage.getItem('rtv.' + k);
+      return v == null ? d : JSON.parse(v);
+    } catch {
+      return d;
+    }
+  },
+  set(k, v) {
+    try {
+      localStorage.setItem('rtv.' + k, JSON.stringify(v));
+    } catch {}
+  },
+};
+
+const state = {
+  settings: {},
+  all: [],
+  channels: [],
+  profile: null,
+  scheduledProfile: null,
+  index: 0,
+  last: null,
+  muted: false,
+  cycles: new Map(),
+  broken: new Set(), // entry ids that wouldn't play
+  status: new Map(), // Twitch on-air status by channel number
+  on: false, // powered on (first tap done)
+};
+
+let token = 0;
+let live = null; // { frame, ch }
+let localNow = null;
+let objectUrl = null;
+
+// ---------- Schedules ----------
+
+const viewed = new Map();
+const lookup = (n) => viewed.get(n) || null;
+const durationOf = (f) => (state.broken.has(f.key) ? 0 : f.dur || 0);
+
+function cycleFor(ch) {
+  if (!state.cycles.has(ch.number)) {
+    const breaks = { bumpers: 1, commercials: 3, ...(state.settings.breaks || {}), ...(ch.breaks || {}) };
+    state.cycles.set(ch.number, Schedule.build(ch, durationOf, breaks, lookup));
+  }
+  return state.cycles.get(ch.number);
+}
+
+const showLabel = (p) => (p.show && p.show !== p.title && !p.title.startsWith(p.show) ? `${p.show}: ${p.title}` : p.title);
+
+function listings(ch, from, to) {
+  if (ch.type === 'local') return Schedule.listings(cycleFor(ch), from, to).map((p) => ({ ...p, title: showLabel(p) }));
+  if (!navigator.onLine) return [{ live: true, off: true, title: 'No signal: no internet', start: from, end: to }];
+  const st = state.status.get(ch.number);
+  const off = !!st && !st.online;
+  return [{ live: true, off, title: (!off && st && st.title) || ch.description || ch.name, start: from, end: to }];
+}
+
+// ---------- Tuning ----------
+
+function teardown() {
+  clearTimeout(blockTimer);
+  if (live) {
+    live.frame.remove();
+    live = null;
+  }
+  localVideo.onloadedmetadata = localVideo.onended = localVideo.onerror = null;
+  localVideo.pause();
+  localVideo.removeAttribute('src');
+  localVideo.load();
+  localVideo.classList.remove('on');
+  if (objectUrl) URL.revokeObjectURL(objectUrl);
+  objectUrl = null;
+  localNow = null;
+  standby(null);
+  document.body.classList.remove('live-on');
+}
+
+function standby(big, small = '') {
+  const el = $('#standby');
+  el.hidden = !big;
+  if (big) {
+    el.querySelector('.big').textContent = big;
+    el.querySelector('.small').textContent = small;
+  }
+}
+
+function tune(i, { quiet = false } = {}) {
+  const n = state.channels.length;
+  if (!n) return;
+  i = ((i % n) + n) % n;
+  if (i !== state.index) state.last = state.index;
+  state.index = i;
+  const ch = state.channels[i];
+  store.set('channel', ch.number);
+  const t = ++token;
+  Effects.snow(quiet ? 300 : 600, state.muted ? 0 : 0.8);
+  teardown();
+  showOsd(ch);
+  if (ch.type === 'local') playLocal(ch, t);
+  else playLive(ch, t);
+  setTimeout(() => t === token && showBanner(), 700);
+}
+
+function tuneNumber(num) {
+  const i = state.channels.findIndex((c) => c.number === num);
+  if (i >= 0) tune(i);
+  else flashOsd(String(num).padStart(2, '0'), 'NO SIGNAL');
+}
+
+// ---------- Live channels: the sites' own embeddable players ----------
+
+function liveUrl(ch) {
+  if (ch.type === 'twitch') {
+    return `https://player.twitch.tv/?channel=${encodeURIComponent(ch.channel)}&parent=${encodeURIComponent(location.hostname)}&autoplay=true&muted=false`;
+  }
+  return new URL('/embed/video', ch.url).href; // owncast
+}
+
+function playLive(ch, t) {
+  if (!navigator.onLine) return standby('NO SIGNAL', 'No internet. The channels on your phone still work.');
+  const st = state.status.get(ch.number);
+  if (st && !st.online) return standby('OFF THE AIR', st.gone ? `${ch.name} has signed off for good` : `${ch.name} isn't broadcasting right now`);
+  const frame = document.createElement('iframe');
+  frame.src = liveUrl(ch);
+  frame.allow = 'autoplay; fullscreen; encrypted-media; picture-in-picture';
+  frame.setAttribute('allowfullscreen', '');
+  frame.referrerPolicy = 'strict-origin-when-cross-origin';
+  screenEl.insertBefore(frame, $('#standby'));
+  live = { frame, ch };
+  // Taps go to the site's player (to press its play button), so the remote stays reachable.
+  document.body.classList.add('live-on');
+  if (ch.type === 'twitch') refreshStatus(ch).then((s) => t === token && s && !s.online && tune(state.index, { quiet: true }));
+}
+
+const TWITCH_WEB_CLIENT_ID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
+async function refreshStatus(ch) {
+  if (ch.type !== 'twitch' || !navigator.onLine) return null;
+  try {
+    const res = await fetch('https://gql.twitch.tv/gql', {
+      method: 'POST',
+      headers: { 'Client-ID': TWITCH_WEB_CLIENT_ID, 'Content-Type': 'text/plain' },
+      body: JSON.stringify({ query: 'query($login: String!) { user(login: $login) { stream { title } } }', variables: { login: ch.channel } }),
+    });
+    const user = (await res.json()).data.user;
+    const s = !user ? { online: false, gone: true, title: '' } : { online: !!user.stream, title: user.stream ? user.stream.title : '' };
+    state.status.set(ch.number, s);
+    return s;
+  } catch {
+    return null;
+  }
+}
+
+// ---------- Your own videos ----------
+
+async function playLocal(ch, t) {
+  if (!ch.episodes.length) return standby('NO SHOWS YET', 'Add videos in the menu');
+  playLocalAt(ch, Date.now(), t);
+}
+
+async function resolveUrl(file) {
+  if (file.stream) return file.stream;
+  const blob = await DB.blob(file.id);
+  if (!blob) throw new Error('missing');
+  if (objectUrl) URL.revokeObjectURL(objectUrl);
+  objectUrl = URL.createObjectURL(blob);
+  return objectUrl;
+}
+
+let blockTimer = 0;
+async function playLocalAt(ch, at, t) {
+  clearTimeout(blockTimer);
+  const loc = Schedule.locate(cycleFor(ch), at);
+  if (!loc) return standby('NO SIGNAL', "None of this channel's videos would play");
+  localNow = { ch, loc };
+  const untilSwitch = loc.contextEnd - Date.now();
+  if (untilSwitch < (loc.item.dur - loc.offset) * 1000 && untilSwitch < 2 ** 31 - 1) {
+    blockTimer = setTimeout(() => t === token && playLocalAt(ch, Date.now() + 250, t), Math.max(0, untilSwitch) + 100);
+  }
+  const file = loc.item.file;
+  const skip = () => {
+    if (t !== token) return;
+    state.broken.add(file.key);
+    state.cycles.delete(ch.number);
+    playLocalAt(ch, Date.now(), t);
+  };
+  let url;
+  try {
+    url = await resolveUrl(file);
+  } catch {
+    return skip();
+  }
+  if (t !== token) return;
+  localVideo.onloadedmetadata = () => {
+    if (t !== token) return;
+    localVideo.currentTime = loc.offset;
+    play();
+  };
+  localVideo.onended = () => t === token && playLocalAt(ch, Date.now() + 750, t);
+  localVideo.onerror = skip;
+  localVideo.muted = state.muted;
+  localVideo.src = url;
+  localVideo.classList.add('on');
+  if (loc.item.kind === 'show' && loc.offset < 2) setTimeout(() => t === token && showBanner(), 1000);
+}
+
+// iOS only lets a video play with sound after a tap. If it refuses, ask for one.
+function play() {
+  localVideo.play().then(
+    () => ($('#tap-play').hidden = true),
+    () => ($('#tap-play').hidden = false)
+  );
+}
+$('#tap-play').addEventListener('click', () => {
+  $('#tap-play').hidden = true;
+  localVideo.play().catch(() => {});
+});
+
+function toggleMute() {
+  state.muted = !state.muted;
+  localVideo.muted = state.muted;
+  flashOsd(state.muted ? 'MUTE' : 'SOUND ON', '', 1500);
+}
+
+// ---------- On-screen display ----------
+
+let osdTimer = 0;
+function flashOsd(big, small, ms = 3000) {
+  const el = $('#osd');
+  el.querySelector('.ch').textContent = big;
+  el.querySelector('.name').textContent = small;
+  el.classList.add('on');
+  clearTimeout(osdTimer);
+  osdTimer = setTimeout(() => el.classList.remove('on'), ms);
+}
+
+const showOsd = (ch) => flashOsd(`CH ${String(ch.number).padStart(2, '0')}`, ch.name.toUpperCase());
+
+let bannerTimer = 0;
+function showBanner() {
+  const ch = state.channels[state.index];
+  if (!ch) return;
+  const el = $('#banner');
+  const now = Date.now();
+  const time = (ms) => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  let netText = ch.name;
+  let nowText;
+  let nextText = '';
+  let progress = null;
+  if (ch.type === 'local' && localNow && localNow.ch.number === ch.number) {
+    const lst = Schedule.listings(cycleFor(ch), now, now + 6 * 3600e3);
+    const cur = lst[0];
+    const nxt = lst[1];
+    const file = localNow.loc.item.file;
+    if (cur.block) netText += ` · ${cur.block}`;
+    nowText = localNow.loc.item.kind === 'show' ? showLabel(cur) : `${showLabel(cur)} (commercial break)`;
+    if (cur.broadcast) {
+      const aired = file.airDate ? new Date(file.airDate + 'T12:00').toLocaleDateString([], { year: 'numeric', month: 'long', day: 'numeric' }) : file.year;
+      nextText = ['Original broadcast', file.network, aired && `aired ${aired}`].filter(Boolean).join(' · ');
+    } else if (nxt) nextText = `Up next at ${time(nxt.start)}: ${showLabel(nxt)}`;
+    progress = Math.min(1, (now - cur.start) / (cur.end - cur.start));
+  } else {
+    const l = listings(ch, now, now + 1)[0];
+    nowText = l ? l.title : ch.name;
+    nextText = ch.type === 'local' || (l && l.off) ? '' : 'LIVE';
+  }
+  el.replaceChildren();
+  const div = (cls, text) => Object.assign(document.createElement('div'), { className: cls, textContent: text });
+  const mid = div('mid', '');
+  mid.append(div('net', netText), div('now', nowText), div(nextText === 'LIVE' ? 'next live' : 'next', nextText));
+  if (progress != null) {
+    const bar = div('bar', '');
+    const fill = document.createElement('i');
+    fill.style.width = progress * 100 + '%';
+    bar.append(fill);
+    mid.append(bar);
+  }
+  el.append(div('num', String(ch.number).padStart(2, '0')), mid, div('clock', time(now)));
+  el.classList.add('on');
+  clearTimeout(bannerTimer);
+  bannerTimer = setTimeout(() => el.classList.remove('on'), 5000);
+}
+
+// ---------- Profiles and PIN ----------
+
+const menu = $('#menu');
+const profiles = () => state.settings.profiles || {};
+const currentProfile = () => profiles()[state.profile] || null;
+
+function applyProfile() {
+  const p = currentProfile();
+  const curNum = state.channels[state.index] && state.channels[state.index].number;
+  viewed.clear();
+  for (const ch of state.all) {
+    if (ch.type === 'local') viewed.set(ch.number, { ...ch, episodes: ch.episodes.filter((f) => Profiles.allowsFile(p, f)) });
+  }
+  state.channels = state.all
+    .map((ch) => (ch.type === 'local' ? viewed.get(ch.number) : ch))
+    .filter((ch) => Profiles.allowsChannel(p, ch) && (ch.type !== 'local' || ch.episodes.length));
+  state.cycles.clear();
+  const i = state.channels.findIndex((c) => c.number === curNum);
+  state.index = i >= 0 ? i : 0;
+  state.last = null;
+  return i >= 0;
+}
+
+function setProfile(id) {
+  if (!profiles()[id]) return;
+  state.profile = id;
+  store.set('profile', id);
+  const kept = applyProfile();
+  flashOsd(profiles()[id].label || id.toUpperCase(), 'PROFILE', 3000);
+  if (!state.channels.length) {
+    teardown();
+    return standby('NO CHANNELS', 'This profile has no channels with anything to watch');
+  }
+  if (!kept || !(localNow || live)) tune(state.index, { quiet: true });
+}
+
+const el = (tag, cls, text) => Object.assign(document.createElement(tag), { className: cls || '', textContent: text || '' });
+
+function closeMenu() {
+  menu.hidden = true;
+  menu.replaceChildren();
+}
+
+// On-screen PIN pad. Resolves true for the right PIN; no PIN set means no lock.
+function askPin(reason) {
+  const pin = String(state.settings.pin || '');
+  if (!pin) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    let typed = '';
+    const shown = el('div', 'pin', 'PIN  ' + '_'.repeat(pin.length));
+    const pad = el('div', 'pad');
+    const finish = (ok) => {
+      closeMenu();
+      resolve(ok);
+    };
+    const press = (k) => {
+      if (k === '⌫') typed = typed.slice(0, -1);
+      else typed += k;
+      shown.textContent = 'PIN  ' + '*'.repeat(typed.length) + '_'.repeat(Math.max(0, pin.length - typed.length));
+      if (typed.length >= pin.length) {
+        if (typed === pin) return finish(true);
+        typed = '';
+        shown.textContent = 'WRONG PIN';
+      }
+    };
+    for (const k of ['1', '2', '3', '4', '5', '6', '7', '8', '9', '⌫', '0']) {
+      const b = el('button', '', k);
+      b.addEventListener('click', () => press(k));
+      pad.append(b);
+    }
+    const cancel = el('button', 'hint', 'Cancel');
+    cancel.addEventListener('click', () => finish(false));
+    menu.replaceChildren(el('h2', '', reason), shown, pad, cancel);
+    menu.hidden = false;
+  });
+}
+
+function openProfileMenu() {
+  const ids = Object.keys(profiles());
+  if (!ids.length) return flashOsd('NO PROFILES', '', 2000);
+  menu.replaceChildren(el('h2', '', "WHO'S WATCHING?"));
+  for (const id of ids) {
+    const p = profiles()[id];
+    const b = el('button', 'choice', `${(p.label || id).toUpperCase()}${p.locked ? '  (PIN)' : ''}${id === state.profile ? '  <' : ''}`);
+    b.addEventListener('click', async () => {
+      closeMenu();
+      if (id === state.profile) return;
+      if (p.locked && !(await askPin(`UNLOCK ${(p.label || id).toUpperCase()}`))) return;
+      setProfile(id);
+    });
+    menu.append(b);
+  }
+  const cancel = el('button', 'hint', 'Cancel');
+  cancel.addEventListener('click', closeMenu);
+  menu.append(cancel);
+  menu.hidden = false;
+}
+
+// ---------- Remote: buttons, number pad, swipes ----------
+
+let digits = '';
+let digitTimer = 0;
+function typeDigit(d) {
+  digits += d;
+  flashOsd(`CH ${digits.padEnd(2, '-')}`, '', 2000);
+  clearTimeout(digitTimer);
+  const maxNum = Math.max(...state.channels.map((c) => c.number));
+  const go = () => {
+    const n = Number(digits);
+    digits = '';
+    tuneNumber(n);
+  };
+  if (Number(digits + '0') > maxNum || digits.length >= 3) go();
+  else digitTimer = setTimeout(go, 1500);
+}
+
+const guideApi = () => ({ channels: state.channels, current: () => state.index, listings, tune: (i) => tune(i) });
+
+const actions = {
+  up: () => tune(state.index + 1),
+  down: () => tune(state.index - 1),
+  last: () => state.last != null && tune(state.last),
+  guide: () => (Guide.isOpen() ? Guide.close() : Guide.open(guideApi())),
+  info: () => showBanner(),
+  mute: () => toggleMute(),
+  profile: () => openProfileMenu(),
+  crt: () => {
+    const on = !document.body.classList.contains('crt');
+    document.body.classList.toggle('crt', on);
+    store.set('crt', on);
+  },
+  menu: async () => {
+    if (await askPin('MENU')) Manage.open();
+  },
+};
+
+document.querySelectorAll('[data-act]').forEach((b) =>
+  b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!state.on) return;
+    remoteShown();
+    actions[b.dataset.act]();
+  })
+);
+document.querySelectorAll('[data-digit]').forEach((b) =>
+  b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    remoteShown();
+    typeDigit(b.dataset.digit);
+  })
+);
+
+// In landscape the remote floats over the picture and hides itself.
+let remoteTimer = 0;
+function remoteShown() {
+  document.body.classList.add('remote-up');
+  clearTimeout(remoteTimer);
+  remoteTimer = setTimeout(() => document.body.classList.remove('remote-up'), 5000);
+}
+
+// Swipe up/down on the picture to change channels; tap for the banner and remote.
+const gesture = $('#crt');
+let touch = null;
+gesture.addEventListener('touchstart', (e) => {
+  const t = e.touches[0];
+  touch = { x: t.clientX, y: t.clientY, at: Date.now() };
+}, { passive: true });
+gesture.addEventListener('touchend', (e) => {
+  if (!touch || !state.on) return;
+  const t = e.changedTouches[0];
+  const dx = t.clientX - touch.x;
+  const dy = t.clientY - touch.y;
+  touch = null;
+  if (Math.abs(dy) > 50 && Math.abs(dy) > Math.abs(dx) * 1.5) {
+    if (Guide.isOpen()) Guide.scrollBy(dy < 0 ? 1 : -1);
+    else tune(state.index + (dy < 0 ? 1 : -1));
+  } else if (Math.abs(dx) < 15 && Math.abs(dy) < 15 && !Guide.isOpen()) {
+    showBanner();
+    remoteShown();
+  }
+});
+// Keyboards (an iPad with a keyboard) get the desktop keys.
+document.addEventListener('keydown', (e) => {
+  if (!state.on || !menu.hidden || Manage.isOpen()) return;
+  if (Guide.isOpen() && Guide.key(e)) return;
+  const k = e.key;
+  if (k === 'ArrowUp' || k === 'PageUp') actions.up();
+  else if (k === 'ArrowDown' || k === 'PageDown') actions.down();
+  else if (/^[0-9]$/.test(k)) typeDigit(k);
+  else if (k === 'Backspace') actions.last();
+  else if (k.toLowerCase() === 'g') actions.guide();
+  else if (k.toLowerCase() === 'i' || k === 'Enter') actions.info();
+  else if (k.toLowerCase() === 'm') actions.mute();
+  else if (k.toLowerCase() === 'k') actions.profile();
+  else if (k.toLowerCase() === 'c') actions.crt();
+  else return;
+  e.preventDefault();
+});
+
+// ---------- Keep the screen awake while it's on ----------
+
+let wakeLock = null;
+async function keepAwake() {
+  try {
+    if ('wakeLock' in navigator && document.visibilityState === 'visible') wakeLock = await navigator.wakeLock.request('screen');
+  } catch {}
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && state.on) {
+    keepAwake();
+    // Coming back to the app: catch up with the schedule, like a real TV would have.
+    if (!Manage.isOpen()) tune(state.index, { quiet: true });
+  }
+});
+
+// ---------- Startup ----------
+
+async function reload() {
+  state.settings = PhoneLib.settings();
+  state.all = PhoneLib.tvChannels().sort((a, b) => a.number - b.number);
+}
+
+const TV = {
+  // Library changed (videos added, channels edited): pick it up without losing the channel.
+  async refresh() {
+    await reload();
+    applyProfile();
+    if (state.on && !Manage.isOpen() && state.channels.length) tune(state.index, { quiet: true });
+  },
+  pause() {
+    token++;
+    teardown();
+    Guide.close();
+  },
+  resume() {
+    if (!state.on) return;
+    if (!state.channels.length) return standby('NO CHANNELS', 'Open the menu to add videos');
+    tune(state.index, { quiet: true });
+  },
+  get state() {
+    return state;
+  },
+};
+
+async function boot() {
+  await PhoneLib.load();
+  await reload();
+  document.body.classList.toggle('crt', store.get('crt', state.settings.crt !== false));
+  const ids = Object.keys(profiles());
+  state.scheduledProfile = Profiles.scheduled(state.settings);
+  state.profile = [state.scheduledProfile, store.get('profile', null), state.settings.defaultProfile].find((id) => id && profiles()[id]) || ids[0] || null;
+  state.channels = [];
+  applyProfile();
+  const i = state.channels.findIndex((c) => c.number === store.get('channel', state.settings.startChannel));
+  state.index = i >= 0 ? i : 0;
+  state.all.filter((c) => c.type === 'twitch').forEach(refreshStatus);
+  setInterval(() => state.all.filter((c) => c.type === 'twitch').forEach(refreshStatus), 60000);
+  setInterval(() => {
+    const s = Profiles.scheduled(state.settings);
+    if (s && s !== state.scheduledProfile) {
+      state.scheduledProfile = s;
+      setProfile(s);
+    }
+  }, 30000);
+  PhoneLib.onChange(() => (Manage.isOpen() ? reload().then(applyProfile) : TV.refresh()));
+  window.addEventListener('online', () => TV.refresh());
+  window.addEventListener('offline', () => TV.refresh());
+
+  // The first tap turns it on: iOS only allows sound after one.
+  $('#power-on').addEventListener('click', () => {
+    $('#power-on').hidden = true;
+    state.on = true;
+    localVideo.play().catch(() => {}); // lets this video element play with sound from now on
+    keepAwake();
+    Effects.power('on');
+    if (!state.channels.length) return standby('NO CHANNELS', 'Tap MENU to add videos');
+    tune(state.index, { quiet: true });
+  });
+}
+
+boot();

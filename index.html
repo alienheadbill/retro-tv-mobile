@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Retro TV">
+  <meta name="theme-color" content="#000000">
+  <title>Retro TV</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="phone.css">
+</head>
+<body class="crt">
+  <div id="tv">
+    <div id="screen">
+      <video id="local" playsinline webkit-playsinline preload="auto"></video>
+      <div id="standby" hidden>
+        <div class="bars"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+        <div class="card"><div class="big"></div><div class="small"></div></div>
+      </div>
+      <canvas id="static" width="200" height="150"></canvas>
+    </div>
+
+    <div id="guide" hidden>
+      <div class="guide-top">
+        <div class="guide-info">
+          <div class="guide-logo">TV<span>GUIDE</span></div>
+          <div class="guide-clock"></div>
+          <div class="guide-pick"></div>
+        </div>
+      </div>
+      <div class="guide-grid">
+        <div class="guide-head"></div>
+        <div class="guide-rows"></div>
+      </div>
+    </div>
+
+    <div id="banner"></div>
+    <div id="osd"><div class="ch"></div><div class="name"></div></div>
+    <div id="vol"></div>
+    <div id="menu" hidden></div>
+    <button id="tap-play" hidden>&#9654; TAP TO PLAY</button>
+    <div id="crt"></div>
+    <div id="power"><div class="line"></div></div>
+    <button id="power-on"><span class="knob"></span><span>TAP TO TURN ON</span></button>
+  </div>
+
+  <div id="remote">
+    <div class="rows">
+      <button data-act="up" class="big">CH &#9650;</button>
+      <button data-act="down" class="big">CH &#9660;</button>
+      <button data-act="guide">GUIDE</button>
+      <button data-act="info">INFO</button>
+      <button data-act="last">LAST</button>
+      <button data-act="mute">MUTE</button>
+      <button data-act="profile">WHO</button>
+      <button data-act="crt">TV LOOK</button>
+      <button data-act="menu" class="accent">MENU</button>
+    </div>
+    <div class="keypad">
+      <button data-digit="1">1</button><button data-digit="2">2</button><button data-digit="3">3</button>
+      <button data-digit="4">4</button><button data-digit="5">5</button><button data-digit="6">6</button>
+      <button data-digit="7">7</button><button data-digit="8">8</button><button data-digit="9">9</button>
+      <button data-digit="0" class="zero">0</button>
+    </div>
+  </div>
+
+  <section id="manage" hidden>
+    <header>
+      <button id="manage-close" class="back">&#9664; TV</button>
+      <nav>
+        <button data-tab="shows" class="on">My Shows</button>
+        <button data-tab="add">Add</button>
+        <button data-tab="find">Find</button>
+        <button data-tab="channels">Channels</button>
+        <button data-tab="settings">Settings</button>
+      </nav>
+    </header>
+    <div class="panes">
+      <div id="pane-shows" class="pane on"></div>
+      <div id="pane-add" class="pane"></div>
+      <div id="pane-find" class="pane"></div>
+      <div id="pane-channels" class="pane"></div>
+      <div id="pane-settings" class="pane"></div>
+    </div>
+    <div id="sheet" hidden><div class="sheet-box"></div></div>
+    <div id="toast" hidden></div>
+  </section>
+
+  <script src="config.js"></script>
+  <script src="meta.js"></script>
+  <script src="archive-core.js"></script>
+  <script src="schedule.js"></script>
+  <script src="profiles.js"></script>
+  <script src="effects.js"></script>
+  <script src="guide.js"></script>
+  <script src="db.js"></script>
+  <script src="phone-lib.js"></script>
+  <script src="tv.js"></script>
+  <script src="manage.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  </script>
+</body>
+</html>
