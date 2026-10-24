@@ -141,6 +141,16 @@ function playLive(ch, t) {
   if (!navigator.onLine) return standby('NO SIGNAL', 'No internet. The channels on your phone still work.');
   const st = state.status.get(ch.number);
   if (st && !st.online) return standby('OFF THE AIR', st.gone ? `${ch.name} has signed off for good` : `${ch.name} isn't broadcasting right now`);
+  // YouTube streams go through the same controllable player as scheduled YouTube channels
+  // (captions off, swipes work once it's playing). If that stream has ended, fall back to whatever
+  // the channel is streaming now.
+  if (ch.type === 'youtube-live' && ch.videoId && !ch.fallback) {
+    return playYouTube({ youtube: ch.videoId }, null, () => t === token && tune(state.index, { quiet: true }), () => {
+      if (t !== token) return;
+      stopYouTube();
+      playLive({ ...ch, fallback: true, videoId: null }, t);
+    }, t);
+  }
   const frame = document.createElement('iframe');
   frame.src = liveUrl(ch);
   frame.allow = 'autoplay; fullscreen; encrypted-media; picture-in-picture';
@@ -250,19 +260,42 @@ function loadYouTubeApi() {
   return ytLoading;
 }
 
+// Sizes the YouTube player so the video's picture box (file.crop, measured on the PC: bars and
+// backgrounds cut away) fills the screen. Without a crop the whole 16:9 frame is fitted.
+let ytCrop = null;
+function layoutYouTube() {
+  const host = $('#yt-host');
+  const f = host && host.querySelector('iframe');
+  if (!f || host.hidden) return;
+  const cw = host.clientWidth;
+  const ch = host.clientHeight;
+  const c = ytCrop || { x: 0, y: 0, w: 1, h: 1 };
+  const aspect = (c.w * 16) / (c.h * 9);
+  const dw = aspect > cw / ch ? cw : ch * aspect;
+  const dh = dw / aspect;
+  const fw = dw / c.w;
+  const fh = (fw * 9) / 16;
+  Object.assign(f.style, { inset: 'auto', width: `${fw}px`, height: `${fh}px`, left: `${(cw - dw) / 2 - c.x * fw}px`, top: `${(ch - dh) / 2 - c.y * fh}px` });
+}
+window.addEventListener('resize', layoutYouTube);
+
 async function playYouTube(file, offset, onEnd, onError, t) {
   const host = $('#yt-host');
   host.hidden = false;
+  ytCrop = file.crop || null;
+  layoutYouTube();
   ytHandlers = {
     state: (e) => {
       if (t !== token) return;
       if (e.data === YT.PlayerState.ENDED) onEnd();
+      if (e.data === YT.PlayerState.PLAYING) captionsOff();
       // Until it plays, taps go to YouTube's own play button.
       document.body.classList.toggle('yt-tap', e.data !== YT.PlayerState.PLAYING && e.data !== YT.PlayerState.BUFFERING);
     },
     error: () => t === token && onError(),
   };
-  const start = Math.floor(offset);
+  // offset null = a live stream: join it live rather than seeking.
+  const start = offset == null ? undefined : Math.floor(offset);
   try {
     await loadYouTubeApi();
   } catch {
@@ -272,18 +305,35 @@ async function playYouTube(file, offset, onEnd, onError, t) {
   if (!ytPlayer) {
     ytPlayer = new YT.Player('yt-player', {
       videoId: file.youtube,
-      playerVars: { autoplay: 1, start, controls: 0, playsinline: 1, rel: 0, fs: 0, disablekb: 1, iv_load_policy: 3, modestbranding: 1 },
+      playerVars: {
+        autoplay: 1, controls: 0, playsinline: 1, rel: 0, fs: 0, disablekb: 1, iv_load_policy: 3, modestbranding: 1,
+        // No captions unless the phone itself insists (iOS "Closed Captions + SDH" setting).
+        cc_load_policy: 0, cc_lang_pref: 'en', hl: 'en',
+        ...(start != null ? { start } : {}),
+      },
       events: {
-        onReady: () => state.muted && ytPlayer.mute(),
+        onReady: () => {
+          layoutYouTube();
+          if (state.muted) ytPlayer.mute();
+        },
         onStateChange: (e) => ytHandlers.state(e),
         onError: (e) => ytHandlers.error(e),
       },
     });
     document.body.classList.add('yt-tap');
   } else {
-    ytPlayer.loadVideoById({ videoId: file.youtube, startSeconds: start });
+    ytPlayer.loadVideoById(start != null ? { videoId: file.youtube, startSeconds: start } : { videoId: file.youtube });
     state.muted ? ytPlayer.mute() : ytPlayer.unMute();
   }
+}
+
+// YouTube turns captions on for some videos (and remembers it); switch them off each time.
+function captionsOff() {
+  try {
+    ytPlayer.unloadModule('captions');
+    ytPlayer.unloadModule('cc');
+    ytPlayer.setOption('captions', 'track', {});
+  } catch {}
 }
 
 function stopYouTube() {
@@ -488,7 +538,17 @@ function typeDigit(d) {
   else digitTimer = setTimeout(go, 1500);
 }
 
-const guideApi = () => ({ channels: state.channels, current: () => state.index, listings, tune: (i) => tune(i) });
+const guideApi = () => ({ channels: state.channels, current: () => state.index, listings, tune: (i) => tune(i), scroll: true });
+
+// The phone guide gets a button to close it without changing the channel.
+(() => {
+  const close = Object.assign(document.createElement('button'), { className: 'guide-close', textContent: 'CLOSE GUIDE' });
+  close.addEventListener('click', (e) => {
+    e.stopPropagation();
+    Guide.close();
+  });
+  $('#guide .guide-info').append(close);
+})();
 
 const actions = {
   up: () => tune(state.index + 1),

@@ -33,10 +33,20 @@ button { font: inherit; color: inherit; cursor: pointer; }
   #tv { position: fixed; inset: 0; width: auto; max-height: none; aspect-ratio: auto; margin: 0; }
 }
 #screen iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #000; }
-#yt-host { position: absolute; inset: 0; background: #000; }
+#yt-host { position: absolute; inset: 0; background: #000; overflow: hidden; }
 #yt-host iframe { position: absolute; inset: 0; width: 100%; height: 100%; }
 /* Until a YouTube video starts, taps go to YouTube's own play button. */
 body.yt-tap #crt { pointer-events: none; }
+
+/* The guide on the phone: a list of every channel you scroll with your finger; tap one to watch. */
+body.guide-open #crt { pointer-events: none; }
+#guide .guide-rows { overflow-y: auto; -webkit-overflow-scrolling: touch; touch-action: pan-y; overscroll-behavior: contain; }
+#guide .guide-row { cursor: pointer; }
+#guide .guide-row:active .chcol { background: var(--guide-cell-hi); color: #000; }
+#guide .guide-close {
+  align-self: flex-start; margin-top: auto; background: #ffd84a; color: #000; border: 0; border-radius: 1.2cqh;
+  font-family: 'VCR', monospace; font-size: 4.5cqh; padding: 1.2cqh 3cqw; letter-spacing: 0.05em;
+}
 
 /* The glass doubles as the swipe/tap surface, except on live channels, where taps belong to
    the site's own player. */

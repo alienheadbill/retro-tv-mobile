@@ -89,7 +89,7 @@ const PhoneLib = (() => {
     });
     // YouTube channels come pre-built from the PC (the phone can't read YouTube pages itself).
     const yt = (D.youtube || []).map((c) => {
-      const f = (v) => ({ url: 'yt:' + v.id, key: 'yt:' + v.id, id: v.id, youtube: v.id, title: v.title, show: v.show || '', dur: v.dur, broadcast: c.mode === 'broadcast' });
+      const f = (v) => ({ url: 'yt:' + v.id, key: 'yt:' + v.id, id: v.id, youtube: v.id, title: v.title, show: v.show || '', dur: v.dur, broadcast: c.mode === 'broadcast', crop: v.crop || null });
       const bumpers = (c.bumpers || []).map(f);
       const commercials = (c.commercials || []).map(f);
       return {

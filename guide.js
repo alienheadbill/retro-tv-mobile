@@ -12,7 +12,9 @@ const Guide = (() => {
   const SLOTS = 4;
   const ROWS_VISIBLE = 6;
 
-  let api = null; // { channels, current, listings(ch, from, to), tune(i) }
+  // api.scroll (the phone): every channel in a list you scroll with your finger, instead of six
+  // rows moved with the remote; no auto-scrolling.
+  let api = null; // { channels, current, listings(ch, from, to), tune(i), scroll? }
   let sel = 0;
   let top = 0;
   let idle = 0;
@@ -36,8 +38,11 @@ const Guide = (() => {
     const chans = api.channels;
     if (sel < top) top = sel;
     if (sel >= top + ROWS_VISIBLE) top = sel - ROWS_VISIBLE + 1;
+    const first = api.scroll ? 0 : top;
+    const last = api.scroll ? chans.length : Math.min(chans.length, top + ROWS_VISIBLE);
+    const scrolled = rows.scrollTop;
     rows.innerHTML = '';
-    for (let i = top; i < Math.min(chans.length, top + ROWS_VISIBLE); i++) {
+    for (let i = first; i < last; i++) {
       const ch = chans[i];
       const row = document.createElement('div');
       row.className = 'guide-row' + (i === sel ? ' sel' : '') + (i === api.current() ? ' tuned' : '');
@@ -73,6 +78,7 @@ const Guide = (() => {
       });
       rows.appendChild(row);
     }
+    if (api.scroll) rows.scrollTop = scrolled;
 
     const ch = chans[sel];
     const now0 = api.listings(ch, now, now + 1)[0];
@@ -87,6 +93,12 @@ const Guide = (() => {
 
   function step() {
     idle++;
+    if (api.scroll) {
+      // Refresh the listings now and then; keep the clock ticking.
+      if (idle % 30 === 0) render();
+      else clock.textContent = fmt(Date.now());
+      return;
+    }
     // After ~10s untouched, scroll through the channels on its own.
     if (idle > 10 && idle % 3 === 0) sel = (sel + 1) % api.channels.length;
     render();
@@ -98,7 +110,9 @@ const Guide = (() => {
     idle = 0;
     el.hidden = false;
     document.body.classList.add('guide-open');
+    rows.scrollTop = 0;
     render();
+    if (api.scroll && rows.children[sel]) rows.children[sel].scrollIntoView({ block: 'center' });
     timer = setInterval(step, 1000);
   }
 
