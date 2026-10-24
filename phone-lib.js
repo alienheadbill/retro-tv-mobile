@@ -215,7 +215,7 @@ const PhoneLib = (() => {
       }));
     // YouTube channels come pre-built from the PC (the phone can't read YouTube pages itself).
     const yt = (D.youtube || []).map((c) => {
-      const f = (v) => ({ url: 'yt:' + v.id, key: 'yt:' + v.id, id: v.id, youtube: v.id, title: v.title, show: v.show || '', dur: v.dur, broadcast: c.mode === 'broadcast', crop: v.crop || null });
+      const f = (v) => ({ url: 'yt:' + v.id, key: 'yt:' + v.id, id: v.id, youtube: v.id, title: v.title, show: v.show || '', dur: v.dur, broadcast: c.mode === 'broadcast', crop: v.crop || null, group: v.group ?? null, part: v.part ?? null, when: v.when || null });
       const bumpers = (c.bumpers || []).map(f);
       const commercials = (c.commercials || []).map(f);
       return {
@@ -224,6 +224,8 @@ const PhoneLib = (() => {
         number: c.number,
         name: c.name,
         order: c.order || 'shuffle',
+        groupOrder: c.groupOrder || null,
+        historyOrder: c.historyOrder || null,
         mode: c.mode || 'episodes',
         breaks: c.breaks || null,
         blocks: Array.isArray(c.blocks) ? c.blocks : [],

@@ -92,6 +92,7 @@ body.live-on #crt { pointer-events: none; }
   display: flex; flex-direction: column; gap: 12px; user-select: none;
 }
 #remote .rows { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+#remote .rows button[data-act='menu'] { grid-column: 1 / -1; }
 #remote .keypad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 #remote .keypad .zero { grid-column: 2; }
 #remote button {

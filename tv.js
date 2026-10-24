@@ -53,9 +53,27 @@ const durationOf = (f) => (state.broken.has(f.key) ? 0 : f.dur || 0);
 function cycleFor(ch) {
   if (!state.cycles.has(ch.number)) {
     const breaks = { bumpers: 1, commercials: 3, ...(state.settings.breaks || {}), ...(ch.breaks || {}) };
-    state.cycles.set(ch.number, Schedule.build(ch, durationOf, breaks, lookup));
+    state.cycles.set(ch.number, Schedule.build(withOrder(ch), durationOf, breaks, lookup));
   }
   return state.cycles.get(ch.number);
+}
+
+// Sports and wrestling channels ("order": "grouped") play in history order or at random; ORDER
+// on the remote switches the channel you're on. Series and events stay in order either way.
+function withOrder(ch) {
+  const pref = ch.order === 'grouped' ? store.get('order.' + ch.number, null) : null;
+  if (!pref) return ch;
+  return { ...ch, groupOrder: pref === 'history' ? ch.historyOrder || 'date' : 'shuffle' };
+}
+
+function toggleOrder() {
+  const ch = state.channels[state.index];
+  if (!ch || ch.order !== 'grouped') return flashOsd('ORDER', 'THIS CHANNEL ALWAYS PLAYS AT RANDOM', 2500);
+  const next = withOrder(ch).groupOrder === 'shuffle' ? 'history' : 'random';
+  store.set('order.' + ch.number, next);
+  state.cycles.delete(ch.number);
+  tune(state.index, { quiet: true });
+  flashOsd(next === 'history' ? 'IN HISTORY ORDER' : 'AT RANDOM', ch.name.toUpperCase(), 3000);
 }
 
 const showLabel = (p) => (p.show && p.show !== p.title && !p.title.startsWith(p.show) ? `${p.show}: ${p.title}` : p.title);
@@ -604,6 +622,7 @@ const actions = {
   menu: async () => {
     if (await askPin('MENU')) Manage.open();
   },
+  order: toggleOrder,
 };
 
 document.querySelectorAll('[data-act]').forEach((b) =>

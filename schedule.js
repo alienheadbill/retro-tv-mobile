@@ -7,6 +7,11 @@
 // afternoons. A block plays its own rotation while it's on; the rest of the day plays the
 // channel's regular rotation. Complete broadcasts (recordings that already contain their
 // commercials) never get extra breaks and play in air-date order.
+//
+// Order "grouped" keeps things that belong together back to back: every video can carry a
+// group (a Finals series, a wrestling event), its part in it (game 3, match 5) and when it
+// happened. Parts play in order; groups play shuffled, in date order ("groupOrder": "date"),
+// or as listed ("groupOrder": "listed").
 
 const Schedule = (() => {
   const EPOCH = new Date(2000, 0, 1).getTime();
@@ -32,16 +37,44 @@ const Schedule = (() => {
     return a;
   }
 
+  function grouped(eps, how, rand) {
+    const groups = new Map();
+    eps.forEach((e, i) => {
+      const k = e.group != null ? 'g:' + e.group : 'u:' + e.url;
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push({ e, i });
+    });
+    const partOf = (x) => (Number.isFinite(x.e.part) ? x.e.part : x.i);
+    let list = [...groups.values()].map((g) => g.sort((a, b) => partOf(a) - partOf(b) || a.i - b.i).map((x) => x.e));
+    if (how === 'date') {
+      const when = (g) => g.map((e) => e.when).filter(Boolean).sort()[0] || null;
+      const dated = list.filter(when).sort((a, b) => when(a).localeCompare(when(b)));
+      const undated = shuffle(list.filter((g) => !when(g)), rand);
+      // Spread the undated ones evenly through the dated run.
+      list = [];
+      let u = 0;
+      dated.forEach((g, i) => {
+        list.push(g);
+        while (u < undated.length && (u + 1) / (undated.length + 1) <= (i + 1) / dated.length) list.push(undated[u++]);
+      });
+      while (u < undated.length) list.push(undated[u++]);
+    } else if (how !== 'listed') {
+      list = shuffle(list, rand);
+    }
+    return list.flat();
+  }
+
   const byAirDate = (a, b) =>
     (a.airDate || '').localeCompare(b.airDate || '') || a.url.localeCompare(b.url, undefined, { numeric: true });
 
   // A segment is one show plus the break after it: bumper, then commercials.
   function cycle(episodes, opts) {
-    const { durationOf, breaks, order, seed, bumpers, commercials } = opts;
+    const { durationOf, breaks, order, groupOrder, seed, bumpers, commercials } = opts;
     const playable = (f) => durationOf(f) > 0;
     const rand = rng(seed);
     let eps = episodes.filter(playable);
     if (order === 'broadcast') eps = eps.slice().sort(byAirDate);
+    else if (order === 'grouped') eps = grouped(eps, groupOrder, rand);
     else if (order !== 'sequential') eps = shuffle(eps, rand);
     const bums = bumpers.filter(playable);
     const coms = commercials.filter(playable);
@@ -76,7 +109,7 @@ const Schedule = (() => {
   // lookup(number) -> another channel, for blocks that borrow a channel's shows.
   function build(ch, durationOf, breaks, lookup = () => null) {
     const order = ch.mode === 'broadcast' ? 'broadcast' : ch.order;
-    const common = { durationOf, breaks, bumpers: ch.bumpers, commercials: ch.commercials };
+    const common = { durationOf, breaks, groupOrder: ch.groupOrder, bumpers: ch.bumpers, commercials: ch.commercials };
     const base = cycle(ch.episodes, { ...common, order, seed: ch.number * 7919 + 17 });
     const blocks = [];
     (ch.blocks || []).forEach((b, i) => {
