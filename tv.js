@@ -736,6 +736,7 @@ async function boot() {
     }
   }, 30000);
   PhoneLib.onChange(() => (Manage.isOpen() ? reload().then(applyProfile) : TV.refresh()));
+  Manage.offerPairing();
   window.addEventListener('online', () => TV.refresh());
   window.addEventListener('offline', () => TV.refresh());
 

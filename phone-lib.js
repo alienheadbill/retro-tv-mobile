@@ -10,10 +10,93 @@ const PhoneLib = (() => {
   let entries = [];
   const listeners = new Set();
 
+  // The home server: a Retro TV PC sharing the shows on its drive. Paired once with its passcode.
+  let home = null; // { url, token, name } once paired
+  let homeHere = null; // { url, name } when this page itself comes from a Retro TV PC
+  let homeLineup = null; // the PC's last lineup (kept so the guide works while it's off)
+  let homeUp = false; // the PC answered the last time we asked
+
+  function timed(url, opts = {}, ms = 8000) {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), ms);
+    return fetch(url, { ...opts, cache: 'no-store', signal: ctl.signal }).finally(() => clearTimeout(timer));
+  }
+
   async function load() {
     channels = (await DB.get('channels')) || D.channels.map((c) => ({ ...c }));
     settings = { ...D.settings, ...((await DB.get('settings')) || {}) };
     entries = await DB.entries();
+    home = (await DB.get('home')) || null;
+    homeLineup = (await DB.get('homeLineup')) || null;
+    // Opened from the PC's own address?
+    if (!/github\.io$/.test(location.hostname)) try {
+      const r = await timed('api/hello', {}, 3000);
+      const j = r.ok ? await r.json() : null;
+      if (j && j.app === 'retro-tv-home') homeHere = { url: new URL('.', location.href).href.replace(/\/$/, ''), name: j.name };
+    } catch {}
+    if (home) await refreshHome(false);
+    setInterval(() => refreshHome(), 5 * 60000);
+    window.addEventListener('online', () => refreshHome());
+    document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && refreshHome());
+  }
+
+  // Asks the PC for its lineup. Only tells the TV when something changed (it retunes).
+  async function refreshHome(notify = true) {
+    if (!home) return 'unpaired';
+    const before = JSON.stringify([homeUp, homeLineup]);
+    let result = 'ok';
+    try {
+      const r = await timed(home.url + '/api/lineup', { headers: { Authorization: 'Bearer ' + home.token } });
+      if (r.status === 401) {
+        // The PC forgot this phone (or got a new passcode and was told to forget it).
+        home = null;
+        homeUp = false;
+        await DB.set('home', null);
+        result = 'unpaired';
+      } else if (!r.ok) {
+        throw new Error(String(r.status));
+      } else {
+        homeLineup = await r.json();
+        homeUp = true;
+        await DB.set('homeLineup', homeLineup);
+      }
+    } catch {
+      homeUp = false;
+      result = 'unreachable';
+    }
+    if (notify && JSON.stringify([homeUp, homeLineup]) !== before) changed();
+    return result;
+  }
+
+  async function pairHome(url, code) {
+    url = String(url).trim().replace(/\/+$/, '');
+    let r;
+    try {
+      r = await timed(url + '/api/pair', { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ code, device: deviceName() }) });
+    } catch {
+      throw new Error("Couldn't reach the PC. Is it on, with the home server turned on?");
+    }
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || `The PC answered ${r.status}`);
+    home = { url, token: j.token, name: j.name || 'PC' };
+    await DB.set('home', home);
+    await refreshHome(false);
+    changed();
+    return home;
+  }
+
+  async function forgetHome() {
+    home = null;
+    homeUp = false;
+    homeLineup = null;
+    await DB.set('home', null);
+    await DB.set('homeLineup', null);
+    changed();
+  }
+
+  function deviceName() {
+    const ua = navigator.userAgent;
+    return /iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1) ? 'iPad' : /iPhone/.test(ua) ? 'iPhone' : /Android/.test(ua) ? 'Android' : 'Browser';
   }
 
   const changed = () => listeners.forEach((fn) => fn());
@@ -87,6 +170,49 @@ const PhoneLib = (() => {
         commercials: commercials.length ? commercials : sharedCommercials,
       };
     });
+    // Shows on the PC's drive, streamed from it while it's reachable.
+    const pc = home && homeUp && homeLineup ? homeLineup.channels || [] : [];
+    const fromPc = (list) =>
+      (list || []).map((v) => ({
+        url: 'home:' + v.id,
+        key: 'home:' + v.id,
+        id: v.id,
+        title: v.title,
+        show: v.show || '',
+        broadcast: !!v.broadcast,
+        airDate: v.airDate || null,
+        year: v.year || null,
+        network: v.network || null,
+        rating: v.rating || null,
+        dur: v.dur,
+        stream: `${home.url}/media/${v.id}?k=${encodeURIComponent(home.token)}`,
+      }));
+    for (const ch of locals) {
+      const p = pc.find((c) => c.number === ch.number);
+      if (!p) continue;
+      ch.episodes = ch.episodes.concat(fromPc(p.episodes));
+      if (ch.bumpers === sharedBumpers && p.bumpers.length) ch.bumpers = fromPc(p.bumpers);
+      if (ch.commercials === sharedCommercials && p.commercials.length) ch.commercials = fromPc(p.commercials);
+    }
+    // PC channels the phone doesn't have yet.
+    const taken = new Set([...locals, ...D.live, ...(D.youtubeLive || []), ...(D.youtube || [])].map((c) => c.number));
+    const pcOnly = pc
+      .filter((p) => !taken.has(p.number) && p.episodes.length)
+      .map((p) => ({
+        type: 'local',
+        source: 'home',
+        number: p.number,
+        name: p.name,
+        order: p.order || settings.localOrder || 'shuffle',
+        mode: p.mode || 'episodes',
+        breaks: p.breaks || null,
+        blocks: p.blocks || [],
+        rating: p.rating || null,
+        description: p.description || '',
+        episodes: fromPc(p.episodes),
+        bumpers: p.bumpers.length ? fromPc(p.bumpers) : sharedBumpers,
+        commercials: p.commercials.length ? fromPc(p.commercials) : sharedCommercials,
+      }));
     // YouTube channels come pre-built from the PC (the phone can't read YouTube pages itself).
     const yt = (D.youtube || []).map((c) => {
       const f = (v) => ({ url: 'yt:' + v.id, key: 'yt:' + v.id, id: v.id, youtube: v.id, title: v.title, show: v.show || '', dur: v.dur, broadcast: c.mode === 'broadcast', crop: v.crop || null });
@@ -108,7 +234,7 @@ const PhoneLib = (() => {
         commercials: commercials.length ? commercials : sharedCommercials,
       };
     });
-    return [...D.live.map((c) => ({ ...c })), ...(D.youtubeLive || []).map((c) => ({ ...c })), ...yt, ...locals];
+    return [...D.live.map((c) => ({ ...c })), ...(D.youtubeLive || []).map((c) => ({ ...c })), ...yt, ...locals, ...pcOnly];
   }
 
   return {
@@ -122,6 +248,10 @@ const PhoneLib = (() => {
     putEntry,
     removeEntry,
     onChange: (fn) => listeners.add(fn),
+    home: () => ({ paired: home ? { name: home.name, url: home.url } : null, here: homeHere, up: homeUp, lineup: homeLineup }),
+    pairHome,
+    forgetHome,
+    refreshHome,
     defaults: D,
   };
 })();

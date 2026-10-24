@@ -484,6 +484,87 @@ const Manage = (() => {
 
   // ---------- Settings ----------
 
+  // ---------- Home server ----------
+
+  function homeCard() {
+    const hs = PhoneLib.home();
+    const box = h('div', { class: 'card' });
+    if (hs.paired) {
+      const shows = (hs.lineup && hs.lineup.channels ? hs.lineup.channels : []).reduce((n, c) => n + c.episodes.length, 0);
+      box.append(
+        h('b', null, `Connected to ${hs.paired.name}`),
+        h('p', { class: 'muted' }, hs.up ? `${shows} episodes from the PC are on their channels.` : `Can't reach ${hs.paired.name} right now. Its shows come back when it's on with the home server turned on.`),
+        h('div', { class: 'row' },
+          h('button', { class: 'btn', onclick: async () => {
+            const r = await PhoneLib.refreshHome();
+            toast(r === 'ok' ? 'Up to date' : r === 'unpaired' ? 'The PC forgot this device. Connect again.' : "Couldn't reach the PC", r !== 'ok');
+            renderSettings();
+          } }, 'Check now'),
+          h('button', { class: 'btn danger', onclick: async () => {
+            await PhoneLib.forgetHome();
+            toast('Disconnected');
+            renderSettings();
+          } }, 'Disconnect'))
+      );
+      return box;
+    }
+    const code = h('input', { type: 'text', inputmode: 'numeric', pattern: '[0-9]*', placeholder: 'Passcode', autocomplete: 'off' });
+    const addr = h('input', { type: 'url', placeholder: 'https://my-pc.example.ts.net', value: hs.here ? hs.here.url : '' });
+    const connect = async () => {
+      try {
+        const url = hs.here ? hs.here.url : addr.value.trim();
+        if (!url) return toast('Enter the PC\'s address', true);
+        if (location.protocol === 'https:' && /^http:/i.test(url)) return toast(`Open ${url} in Safari instead, and connect from there`, true);
+        const r = await PhoneLib.pairHome(url, code.value);
+        toast(`Connected to ${r.name}`);
+        renderSettings();
+      } catch (e) {
+        toast(e.message, true);
+      }
+    };
+    box.append(
+      h('p', { class: 'muted' }, hs.here
+        ? `This page comes from ${hs.here.name}. Enter the passcode from its Library window ("Phone at home" tab) to watch the shows on its drive.`
+        : 'Watch the shows on your PC\'s drive: on the PC, open the Library window, "Phone at home" tab, turn it on, and open the address it shows in Safari on this device.'),
+      hs.here ? null : addr,
+      h('div', { class: 'grid' }, code, h('button', { class: 'btn primary', onclick: connect }, 'Connect'))
+    );
+    return box;
+  }
+
+  // When the app is opened from a PC that hasn't been connected yet, ask for its passcode once.
+  function offerPairing() {
+    const hs = PhoneLib.home();
+    if (!hs.here || hs.paired) return;
+    const el = (tag, cls, text) => Object.assign(document.createElement(tag), { className: cls || '', textContent: text || '' });
+    const wrap = el('div');
+    wrap.id = 'pairing';
+    const card = el('div', 'wn-card');
+    const input = el('input', 'pair-code');
+    Object.assign(input, { type: 'text', inputMode: 'numeric', placeholder: '000000', autocomplete: 'off', maxLength: 6 });
+    const msg = el('div', 'pair-msg', '');
+    const ok = el('button', 'wn-ok', 'CONNECT');
+    const later = el('button', 'wn-later', 'Not now');
+    ok.addEventListener('click', async () => {
+      ok.disabled = true;
+      msg.textContent = '';
+      try {
+        await PhoneLib.pairHome(hs.here.url, input.value);
+        wrap.remove();
+        toastOnTv(`CONNECTED TO ${hs.here.name.toUpperCase()}`);
+      } catch (e) {
+        msg.textContent = e.message;
+      }
+      ok.disabled = false;
+    });
+    later.addEventListener('click', () => wrap.remove());
+    card.append(el('div', 'wn-head', 'YOUR PC'), el('div', 'wn-title', `Watch the shows on ${hs.here.name}`), el('div', 'pair-help', 'Enter the passcode shown in its Library window, "Phone at home" tab.'), input, msg, ok, later);
+    wrap.append(card);
+    document.body.append(wrap);
+  }
+
+  const toastOnTv = (text) => TV.osd && TV.osd(text, '', 3000);
+
   async function renderSettings() {
     const pane = $('#pane-settings');
     const s = PhoneLib.settings();
@@ -500,6 +581,8 @@ const Manage = (() => {
     pane.replaceChildren(
       !standalone ? h('div', { class: 'card' }, h('b', null, 'Put Retro TV on your Home Screen'),
         h('p', { class: 'muted' }, 'In Safari, tap the Share button, then "Add to Home Screen". It then opens fullscreen like an app and keeps your videos safe from Safari\'s cleanup.')) : null,
+      h('h3', null, 'Shows on your PC'),
+      homeCard(),
       h('h3', null, 'PC setup'),
       h('div', { class: 'card' },
         h('p', { class: 'muted' }, 'In the PC\'s Library window, Channels tab, use "Export for phone", put the file on this device, and import it here. You get the same channels, time blocks and profiles, and videos you add are recognized by name.'),
@@ -565,5 +648,5 @@ const Manage = (() => {
     renderSettings();
   }
 
-  return { open, close, isOpen: () => !root.hidden, toast };
+  return { open, close, isOpen: () => !root.hidden, toast, offerPairing };
 })();

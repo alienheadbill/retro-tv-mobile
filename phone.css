@@ -188,7 +188,7 @@ body.live-on #crt { pointer-events: none; }
 #toast.bad { border-color: var(--bad); }
 
 /* ---------- What's new ---------- */
-#whatsnew {
+#whatsnew, #pairing {
   position: fixed; inset: 0; z-index: 200; background: rgba(0, 0, 0, 0.7);
   display: flex; align-items: center; justify-content: center; padding: calc(16px + var(--safe-t)) 16px calc(16px + var(--safe-b));
 }
@@ -210,3 +210,12 @@ body.live-on #crt { pointer-events: none; }
 #manage .wn-title { color: inherit; }
 #manage .wn-date { color: var(--muted); }
 #manage .wn-entry + .wn-entry { border-top-color: var(--line); }
+
+/* Connecting to the PC (shown over the power button when the app is opened from the PC). */
+.pair-help { font-size: 14px; color: #c8ffd0; }
+.pair-code {
+  font: 700 34px/1 'VCR', monospace; letter-spacing: 0.3em; text-align: center; padding: 10px; border-radius: 10px;
+  background: #000; color: #39ff4f; border: 2px solid #39ff4f; width: 100%;
+}
+.pair-msg { color: var(--bad); font-size: 14px; min-height: 1em; }
+.wn-later { background: none; border: 0; color: #7fbf88; font-size: 15px; padding: 6px; }

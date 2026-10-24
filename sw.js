@@ -1,6 +1,6 @@
 // Offline support: the app itself is cached so it opens with no signal. Videos are stored by
 // the app in IndexedDB, and streams/archive requests always go to the network.
-const VERSION = '202610241805';
+const VERSION = '202610241816';
 const ASSETS = ["./","archive-core.js","config.js","db.js","effects.js","fonts/VT323-Regular.ttf","guide.js","icons/icon-180.png","icons/icon-192.png","icons/icon-512.png","index.html","manage.js","manifest.webmanifest","meta.js","phone-lib.js","phone.css","profiles.js","schedule.js","style.css","tv.js","update.js"];
 const CACHE = 'retrotv-' + VERSION;
 
@@ -18,6 +18,8 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin) return;
+  // A Retro TV PC's own API and videos (when the app is opened from the PC) go straight to it.
+  if (/\/(api|media)\//.test(url.pathname)) return;
   e.respondWith(
     caches.match(e.request, { ignoreSearch: true }).then((hit) => hit || fetch(e.request))
   );
