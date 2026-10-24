@@ -316,8 +316,8 @@ async function playYouTube(file, offset, onEnd, onError, t) {
           layoutYouTube();
           if (state.muted) ytPlayer.mute();
         },
-        onStateChange: (e) => ytHandlers.state(e),
-        onError: (e) => ytHandlers.error(e),
+        onStateChange: (e) => ytHandlers.state && ytHandlers.state(e),
+        onError: (e) => ytHandlers.error && ytHandlers.error(e),
       },
     });
     document.body.classList.add('yt-tap');
@@ -674,6 +674,7 @@ const TV = {
   get state() {
     return state;
   },
+  osd: flashOsd,
 };
 
 async function boot() {

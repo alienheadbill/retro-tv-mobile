@@ -526,7 +526,16 @@ const Manage = (() => {
       h('div', { class: 'card' },
         h('p', null, est ? `Using ${fmtBytes(est.usage)}${est.quota ? ` of about ${fmtBytes(est.quota)} available to Retro TV` : ''}` : 'Storage size unknown'),
         h('p', { class: 'muted' }, isPersisted ? 'Videos are kept until you delete them.' : 'If the device runs very low on space, iOS may clear Retro TV\'s videos. Keep the originals on your PC.')),
-      h('p', { class: 'muted' }, `Retro TV for phone · version ${window.RTV_DEFAULTS.version}`)
+      h('h3', null, 'Updates'),
+      h('div', { class: 'card' },
+        h('p', null, `Version ${window.RTV_DEFAULTS.version}`),
+        h('p', { class: 'muted' }, "New versions install by themselves when you open the app. There's no need to remove it from the Home Screen."),
+        h('button', { class: 'btn', onclick: async () => {
+          const r = await Updates.check().catch(() => 'offline');
+          toast({ latest: 'You have the latest version', installing: 'Installing the update...', offline: "Couldn't check: no internet?", unsupported: "Updates aren't available in this browser" }[r], r === 'offline');
+        } }, 'Check for updates')),
+      Updates.log.length ? h('h3', null, "What's new") : null,
+      Updates.log.length ? h('div', { class: 'card' }, ...Updates.entries(Updates.log)) : null
     );
   }
 
