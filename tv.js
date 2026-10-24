@@ -279,11 +279,44 @@ function layoutYouTube() {
 }
 window.addEventListener('resize', layoutYouTube);
 
+// YouTube's own ads. The embedded player doesn't say when one is on, but the show's clock stops
+// (or its length changes to the ad's) while the player says it's playing. During one the whole
+// frame is shown, not the show's crop (which would cut off the ad's Skip button), and taps go to
+// the player so Skip can be tapped.
+let ytAdWatch = 0;
+function watchForAds(file, t) {
+  clearInterval(ytAdWatch);
+  document.body.classList.remove('yt-ad');
+  const crop = file.crop || null;
+  let last = -1;
+  let still = 0;
+  let ad = false;
+  const set = (on) => {
+    if (on === ad) return;
+    ad = on;
+    ytCrop = on ? null : crop;
+    layoutYouTube();
+    document.body.classList.toggle('yt-ad', on);
+    if (on) flashOsd('COMMERCIAL', 'TAP SKIP ON THE PICTURE WHEN IT SHOWS UP', 4000);
+  };
+  ytAdWatch = setInterval(() => {
+    if (t !== token || !ytPlayer || !ytPlayer.getPlayerState) return;
+    if (ytPlayer.getPlayerState() !== YT.PlayerState.PLAYING) return;
+    const now = ytPlayer.getCurrentTime();
+    const len = ytPlayer.getDuration();
+    still = Math.abs(now - last) < 0.25 ? still + 1 : 0;
+    last = now;
+    const wrongLength = file.dur && len > 0 && len < 300 && Math.abs(len - file.dur) > 30;
+    set(still >= 3 || wrongLength);
+  }, 1000);
+}
+
 async function playYouTube(file, offset, onEnd, onError, t) {
   const host = $('#yt-host');
   host.hidden = false;
   ytCrop = file.crop || null;
   layoutYouTube();
+  watchForAds(file, t);
   ytHandlers = {
     state: (e) => {
       if (t !== token) return;
@@ -338,7 +371,8 @@ function captionsOff() {
 
 function stopYouTube() {
   ytHandlers = {};
-  document.body.classList.remove('yt-tap');
+  clearInterval(ytAdWatch);
+  document.body.classList.remove('yt-tap', 'yt-ad');
   if (ytPlayer && ytPlayer.stopVideo) ytPlayer.stopVideo();
   const host = $('#yt-host');
   if (host) host.hidden = true;
