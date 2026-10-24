@@ -33,6 +33,10 @@ button { font: inherit; color: inherit; cursor: pointer; }
   #tv { position: fixed; inset: 0; width: auto; max-height: none; aspect-ratio: auto; margin: 0; }
 }
 #screen iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #000; }
+#yt-host { position: absolute; inset: 0; background: #000; }
+#yt-host iframe { position: absolute; inset: 0; width: 100%; height: 100%; }
+/* Until a YouTube video starts, taps go to YouTube's own play button. */
+body.yt-tap #crt { pointer-events: none; }
 
 /* The glass doubles as the swipe/tap surface, except on live channels, where taps belong to
    the site's own player. */

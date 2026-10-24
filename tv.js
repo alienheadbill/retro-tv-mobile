@@ -76,6 +76,7 @@ function teardown() {
     live.frame.remove();
     live = null;
   }
+  stopYouTube();
   localVideo.onloadedmetadata = localVideo.onended = localVideo.onerror = null;
   localVideo.pause();
   localVideo.removeAttribute('src');
@@ -125,6 +126,13 @@ function tuneNumber(num) {
 function liveUrl(ch) {
   if (ch.type === 'twitch') {
     return `https://player.twitch.tv/?channel=${encodeURIComponent(ch.channel)}&parent=${encodeURIComponent(location.hostname)}&autoplay=true&muted=false`;
+  }
+  if (ch.type === 'youtube-live') {
+    // The stream found when the app was published; if it has restarted since, fall back to
+    // whatever the channel is streaming now.
+    return ch.videoId
+      ? `https://www.youtube.com/embed/${ch.videoId}?autoplay=1&playsinline=1&rel=0`
+      : `https://www.youtube.com/embed/live_stream?channel=${ch.channelId}&autoplay=1&playsinline=1`;
   }
   return new URL('/embed/video', ch.url).href; // owncast
 }
@@ -196,6 +204,12 @@ async function playLocalAt(ch, at, t) {
     state.cycles.delete(ch.number);
     playLocalAt(ch, Date.now(), t);
   };
+  if (file.youtube) {
+    localVideo.pause();
+    localVideo.classList.remove('on');
+    return playYouTube(file, loc.offset, () => t === token && playLocalAt(ch, Date.now() + 750, t), skip, t);
+  }
+  stopYouTube();
   let url;
   try {
     url = await resolveUrl(file);
@@ -216,6 +230,70 @@ async function playLocalAt(ch, at, t) {
   if (loc.item.kind === 'show' && loc.offset < 2) setTimeout(() => t === token && showBanner(), 1000);
 }
 
+// ---------- YouTube videos on scheduled channels ----------
+
+// One YouTube player, reused for every video: iOS remembers that it was allowed to play with
+// sound, so only the very first video needs a tap.
+let ytPlayer = null;
+let ytLoading = null;
+let ytHandlers = {};
+
+function loadYouTubeApi() {
+  if (!ytLoading) {
+    ytLoading = new Promise((resolve) => {
+      window.onYouTubeIframeAPIReady = resolve;
+      const s = document.createElement('script');
+      s.src = 'https://www.youtube.com/iframe_api';
+      document.head.append(s);
+    });
+  }
+  return ytLoading;
+}
+
+async function playYouTube(file, offset, onEnd, onError, t) {
+  const host = $('#yt-host');
+  host.hidden = false;
+  ytHandlers = {
+    state: (e) => {
+      if (t !== token) return;
+      if (e.data === YT.PlayerState.ENDED) onEnd();
+      // Until it plays, taps go to YouTube's own play button.
+      document.body.classList.toggle('yt-tap', e.data !== YT.PlayerState.PLAYING && e.data !== YT.PlayerState.BUFFERING);
+    },
+    error: () => t === token && onError(),
+  };
+  const start = Math.floor(offset);
+  try {
+    await loadYouTubeApi();
+  } catch {
+    return onError();
+  }
+  if (t !== token) return;
+  if (!ytPlayer) {
+    ytPlayer = new YT.Player('yt-player', {
+      videoId: file.youtube,
+      playerVars: { autoplay: 1, start, controls: 0, playsinline: 1, rel: 0, fs: 0, disablekb: 1, iv_load_policy: 3, modestbranding: 1 },
+      events: {
+        onReady: () => state.muted && ytPlayer.mute(),
+        onStateChange: (e) => ytHandlers.state(e),
+        onError: (e) => ytHandlers.error(e),
+      },
+    });
+    document.body.classList.add('yt-tap');
+  } else {
+    ytPlayer.loadVideoById({ videoId: file.youtube, startSeconds: start });
+    state.muted ? ytPlayer.mute() : ytPlayer.unMute();
+  }
+}
+
+function stopYouTube() {
+  ytHandlers = {};
+  document.body.classList.remove('yt-tap');
+  if (ytPlayer && ytPlayer.stopVideo) ytPlayer.stopVideo();
+  const host = $('#yt-host');
+  if (host) host.hidden = true;
+}
+
 // iOS only lets a video play with sound after a tap. If it refuses, ask for one.
 function play() {
   localVideo.play().then(
@@ -231,6 +309,7 @@ $('#tap-play').addEventListener('click', () => {
 function toggleMute() {
   state.muted = !state.muted;
   localVideo.muted = state.muted;
+  if (ytPlayer && ytPlayer.mute) state.muted ? ytPlayer.mute() : ytPlayer.unMute();
   flashOsd(state.muted ? 'MUTE' : 'SOUND ON', '', 1500);
 }
 

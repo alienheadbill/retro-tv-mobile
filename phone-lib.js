@@ -87,7 +87,28 @@ const PhoneLib = (() => {
         commercials: commercials.length ? commercials : sharedCommercials,
       };
     });
-    return [...D.live.map((c) => ({ ...c })), ...locals];
+    // YouTube channels come pre-built from the PC (the phone can't read YouTube pages itself).
+    const yt = (D.youtube || []).map((c) => {
+      const f = (v) => ({ url: 'yt:' + v.id, key: 'yt:' + v.id, id: v.id, youtube: v.id, title: v.title, show: v.show || '', dur: v.dur, broadcast: c.mode === 'broadcast' });
+      const bumpers = (c.bumpers || []).map(f);
+      const commercials = (c.commercials || []).map(f);
+      return {
+        type: 'local',
+        source: 'youtube',
+        number: c.number,
+        name: c.name,
+        order: c.order || 'shuffle',
+        mode: c.mode || 'episodes',
+        breaks: c.breaks || null,
+        blocks: Array.isArray(c.blocks) ? c.blocks : [],
+        rating: c.rating || null,
+        description: c.description || '',
+        episodes: online ? c.episodes.map(f) : [],
+        bumpers: bumpers.length ? bumpers : sharedBumpers,
+        commercials: commercials.length ? commercials : sharedCommercials,
+      };
+    });
+    return [...D.live.map((c) => ({ ...c })), ...(D.youtubeLive || []).map((c) => ({ ...c })), ...yt, ...locals];
   }
 
   return {
