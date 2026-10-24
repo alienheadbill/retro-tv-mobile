@@ -1,7 +1,7 @@
 'use strict';
 // Viewing profiles (Kids / Family / Late Night) from channels.json "settings.profiles".
-// A profile picks channels by number or range ("20-29", "*"), can cap ratings, and can be
-// locked behind the PIN. "settings.profileSchedule" switches profiles at set times.
+// A profile picks channels by number or range ("20-29", "*"), can cap ratings (except for its
+// "always" channels), and can be locked behind the PIN. "settings.profileSchedule" switches profiles at set times.
 
 const Profiles = (() => {
   const RATINGS = ['TV-Y', 'TV-Y7', 'TV-G', 'TV-PG', 'TV-14', 'TV-MA'];
@@ -18,16 +18,19 @@ const Profiles = (() => {
     });
   }
 
+  // "always": channels this profile shows whatever their rating (e.g. wrestling and sports).
   function allowsChannel(p, ch) {
     if (!p) return true;
+    if (p.always && matches(p.always, ch.number)) return true;
     if (!matches(p.channels, ch.number)) return false;
     if (p.maxRating && ch.rating && rank(ch.rating) > rank(p.maxRating)) return false;
     return true;
   }
 
   // Unrated files are allowed unless the profile says otherwise ("allowUnrated": false).
-  function allowsFile(p, f) {
+  function allowsFile(p, f, ch) {
     if (!p || !p.maxRating) return true;
+    if (ch && p.always && matches(p.always, ch.number)) return true;
     if (!f.rating || rank(f.rating) < 0) return p.allowUnrated !== false;
     return rank(f.rating) <= rank(p.maxRating);
   }

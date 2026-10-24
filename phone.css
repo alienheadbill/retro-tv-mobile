@@ -26,7 +26,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 /* ---------- The TV box ---------- */
 #tv {
-  position: relative; inset: auto; width: 100vw; aspect-ratio: 4 / 3; max-height: 62vh;
+  position: relative; inset: auto; width: 100vw; aspect-ratio: 4 / 3; max-height: 62vh; max-height: 62dvh;
   margin: var(--safe-t) auto 0; container-type: size;
 }
 @media (orientation: landscape) {
@@ -113,10 +113,14 @@ body.live-on #crt { pointer-events: none; }
   #remote button { font-size: 18px; padding: 10px 0; }
   #remote button.big { font-size: 20px; padding: 12px 0; }
   body.remote-up #remote { opacity: 1; pointer-events: auto; }
-  /* On live channels taps go to the player, so keep a small remote on screen. */
-  body.live-on #remote { opacity: 0.55; pointer-events: auto; width: 150px; }
-  body.live-on #remote .rows { grid-template-columns: 1fr 1fr; }
-  body.live-on #remote .rows button:not(.big):not(.accent):not([data-act='guide']) { display: none; }
+  /* When taps go to the player (live channels, YouTube's play button, ads), keep a small remote
+     on screen; during ads it sits at the top, clear of YouTube's Skip button. */
+  body.live-on #remote, body.yt-tap #remote, body.yt-ad #remote { opacity: 0.55; pointer-events: auto; width: 150px; }
+  body.live-on #remote .rows, body.yt-tap #remote .rows, body.yt-ad #remote .rows { grid-template-columns: 1fr 1fr; }
+  body.live-on #remote .rows button:not(.big):not(.accent):not([data-act='guide']),
+  body.yt-tap #remote .rows button:not(.big):not(.accent):not([data-act='guide']),
+  body.yt-ad #remote .rows button:not(.big):not(.accent):not([data-act='guide']) { display: none; }
+  body.yt-ad #remote { top: calc(10px + var(--safe-t)); transform: none; }
 }
 
 /* ---------- Menu (manage) ---------- */

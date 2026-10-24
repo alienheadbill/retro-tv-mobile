@@ -278,6 +278,10 @@ function layoutYouTube() {
   Object.assign(f.style, { inset: 'auto', width: `${fw}px`, height: `${fh}px`, left: `${(cw - dw) / 2 - c.x * fw}px`, top: `${(ch - dh) / 2 - c.y * fh}px` });
 }
 window.addEventListener('resize', layoutYouTube);
+// Turning the phone: iOS settles on the new size in steps, after the resize event. Lay out again
+// whenever the box really changes size, and once more when the rotation has finished.
+if (window.ResizeObserver) new ResizeObserver(() => layoutYouTube()).observe($('#yt-host'));
+window.addEventListener('orientationchange', () => [150, 500, 1000].forEach((ms) => setTimeout(layoutYouTube, ms)));
 
 // YouTube's own ads. The embedded player doesn't say when one is on, but the show's clock stops
 // (or its length changes to the ad's) while the player says it's playing. During one the whole
@@ -467,7 +471,7 @@ function applyProfile() {
   const curNum = state.channels[state.index] && state.channels[state.index].number;
   viewed.clear();
   for (const ch of state.all) {
-    if (ch.type === 'local') viewed.set(ch.number, { ...ch, episodes: ch.episodes.filter((f) => Profiles.allowsFile(p, f)) });
+    if (ch.type === 'local') viewed.set(ch.number, { ...ch, episodes: ch.episodes.filter((f) => Profiles.allowsFile(p, f, ch)) });
   }
   state.channels = state.all
     .map((ch) => (ch.type === 'local' ? viewed.get(ch.number) : ch))
