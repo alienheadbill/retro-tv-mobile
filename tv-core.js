@@ -15,7 +15,7 @@
 //   playLive(ch, t)          play a live channel (a site's own player)
 //   stopLive()               and stop it
 //   hasStatus(ch)            optional: whether status(ch) can say if a live channel is on the air
-//   status(ch)               optional, async: { online, title, gone } or null
+//   status(ch, force)        optional, async: { online, title, gone } or null (force: ask afresh)
 //   applyVolume()            push state.volume / state.muted to the players
 //   showVolume()             show the volume (or MUTE) on screen
 //   snowVolume()             how loud the static between channels is
@@ -68,6 +68,11 @@ const TVCore = (() => {
     let blockTimer = 0;
     let slotTimer = 0;
     let loadTimer = 0;
+    let startTimer = 0;
+    // Surfing: the channel number and static show at once, but the player only starts once the
+    // viewer has stayed on a channel this long (the static covers the wait). Pressing CH up five
+    // times quickly loads one channel, not five.
+    const SETTLE = 350;
 
     // ---------- Health (src/health.js) ----------
 
@@ -100,11 +105,14 @@ const TVCore = (() => {
           const keys = ch.type === 'local' ? ch.episodes.map(keyOf) : ['live:' + ch.number];
           const recs = keys.map((k) => health.get(k)).filter(Boolean);
           const bad = recs.filter((r) => r.failures > 0);
+          const starts = recs.map((r) => r.loadMs).filter((ms) => ms > 0).sort((a, b) => a - b);
           return {
             number: ch.number,
             status: channelHealth(ch),
             sources: keys.length,
             failing: bad.length,
+            // Typical time from tuning in to the picture starting (the median of its sources).
+            startMs: starts.length ? starts[Math.floor(starts.length / 2)] : null,
             lastOk: Math.max(0, ...recs.map((r) => r.lastOk || 0)) || null,
             lastFail: Math.max(0, ...recs.map((r) => r.lastFail || 0)) || null,
             lastError: (bad.sort((a, b) => b.lastFail - a.lastFail)[0] || {}).lastError || null,
@@ -203,11 +211,17 @@ const TVCore = (() => {
       Effects.snow(quiet ? 300 : 650, state.muted ? 0 : p.snowVolume());
       teardown();
       showOsd(ch);
-      if (ch.type === 'local') playLocal(ch, t);
-      else {
-        liveOn = ch;
-        p.playLive(ch, t);
-      }
+      clearTimeout(startTimer);
+      const begin = () => {
+        if (t !== token) return;
+        if (ch.type === 'local') playLocal(ch, t);
+        else {
+          liveOn = ch;
+          p.playLive(ch, t);
+        }
+      };
+      if (quiet) begin();
+      else startTimer = setTimeout(begin, SETTLE);
       setTimeout(() => t === token && showBanner(), 700);
     }
 
@@ -449,9 +463,9 @@ const TVCore = (() => {
 
     // ---------- Live channels' on-air status ----------
 
-    async function refreshStatus(ch) {
+    async function refreshStatus(ch, force = false) {
       if (!p.status) return null;
-      const s = await p.status(ch);
+      const s = await p.status(ch, force);
       if (s) state.status.set(ch.number, s);
       return s;
     }
