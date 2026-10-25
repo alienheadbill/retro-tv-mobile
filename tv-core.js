@@ -35,6 +35,17 @@ const TVCore = (() => {
   const keyOf = (f) => f.key || f.url;
   const time = (ms) => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 
+  // Keep the TV box and the picture from ever being scrolled (see style.css).
+  for (const sel of ['#tv', '#screen']) {
+    const box = $(sel);
+    if (!box) continue;
+    const pin = () => {
+      if (box.scrollTop || box.scrollLeft) box.scrollTop = box.scrollLeft = 0;
+    };
+    box.addEventListener('scroll', pin);
+    window.addEventListener('resize', pin);
+  }
+
   function create(platform) {
     const p = platform;
     const store = p.store;

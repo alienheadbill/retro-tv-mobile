@@ -27,11 +27,13 @@ html, body {
   font-family: 'Trebuchet MS', 'Segoe UI', sans-serif;
 }
 
-#tv { position: absolute; inset: 0; overflow: hidden; background: #000; }
+/* clip, not just hidden: a hidden-overflow box can still be scrolled (by focus, scroll-into-view,
+   or the browser keeping its place on a resize), which shifts the whole picture. */
+#tv { position: absolute; inset: 0; overflow: hidden; overflow: clip; overflow-anchor: none; background: #000; }
 body.crt #tv { border-radius: 2.2cqmin; }
 
 /* ---------- The picture ---------- */
-#screen { position: absolute; inset: 0; background: #000; overflow: hidden; z-index: 1; }
+#screen { position: absolute; inset: 0; background: #000; overflow: hidden; overflow: clip; overflow-anchor: none; z-index: 1; }
 #screen webview, #screen video {
   position: absolute; inset: 0; width: 100%; height: 100%;
   border: 0; background: #000; object-fit: contain;

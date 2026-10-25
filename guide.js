@@ -112,7 +112,10 @@ const Guide = (() => {
     document.body.classList.add('guide-open');
     rows.scrollTop = 0;
     render();
-    if (api.scroll && rows.children[sel]) rows.children[sel].scrollIntoView({ block: 'center' });
+    // Centre the current channel by scrolling the list itself. (scrollIntoView would also scroll
+    // the TV box around it, which shifts the whole picture.)
+    const row = api.scroll && rows.children[sel];
+    if (row) rows.scrollTop += row.getBoundingClientRect().top - rows.getBoundingClientRect().top - (rows.clientHeight - row.offsetHeight) / 2;
     timer = setInterval(step, 1000);
   }
 

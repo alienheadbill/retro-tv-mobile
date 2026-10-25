@@ -131,12 +131,23 @@ function layoutYouTube() {
   const fw = dw / c.w;
   const fh = (fw * 9) / 16;
   Object.assign(f.style, { inset: 'auto', width: `${fw}px`, height: `${fh}px`, left: `${(cw - dw) / 2 - c.x * fw}px`, top: `${(ch - dh) / 2 - c.y * fh}px` });
+  laidOut = `${cw}x${ch}|${JSON.stringify(ytCrop)}`;
 }
-window.addEventListener('resize', layoutYouTube);
+// A safety net that doesn't rely on any event: if the box's size changed since the last layout
+// (a rotation the phone didn't announce), lay out again.
+let laidOut = '';
+setInterval(() => {
+  const host = $('#yt-host');
+  if (host && !host.hidden && `${host.clientWidth}x${host.clientHeight}|${JSON.stringify(ytCrop)}` !== laidOut) layoutYouTube();
+}, 1000);
 // Turning the phone: iOS settles on the new size in steps, after the resize event. Lay out again
-// whenever the box really changes size, and once more when the rotation has finished.
+// whenever the box really changes size, and a few more times while the rotation finishes.
+const relayout = () => [0, 150, 500, 1000].forEach((ms) => setTimeout(layoutYouTube, ms));
+window.addEventListener('resize', relayout);
+window.addEventListener('orientationchange', relayout);
+if (window.visualViewport) window.visualViewport.addEventListener('resize', relayout);
+matchMedia('(orientation: portrait)').addEventListener && matchMedia('(orientation: portrait)').addEventListener('change', relayout);
 if (window.ResizeObserver) new ResizeObserver(() => layoutYouTube()).observe($('#yt-host'));
-window.addEventListener('orientationchange', () => [150, 500, 1000].forEach((ms) => setTimeout(layoutYouTube, ms)));
 
 // YouTube's own ads. The embedded player doesn't say when one is on, but the show's clock stops
 // (or its length changes to the ad's) while the player says it's playing. During one the whole
