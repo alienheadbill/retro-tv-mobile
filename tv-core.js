@@ -80,11 +80,11 @@ const TVCore = (() => {
     const played = store.get('played', []); // what actually aired, stand-ins included, newest last
     let lastLogged = '';
 
-    function logAired(ch, scheduled, file, reason) {
+    function logAired(ch, scheduled, file, reason, copy) {
       const id = `${ch.number}|${keyOf(scheduled)}|${keyOf(file)}`;
       if (id === lastLogged) return;
       lastLogged = id;
-      played.push({ at: Date.now(), ch: ch.number, scheduled: scheduled.title, aired: file.title, standIn: file !== scheduled || undefined, reason: reason || undefined });
+      played.push({ at: Date.now(), ch: ch.number, scheduled: scheduled.title, aired: file.title, standIn: (file !== scheduled && !copy) || undefined, copy: copy || undefined, reason: reason || undefined });
       if (played.length > 200) played.splice(0, played.length - 200);
       store.set('played', played);
     }
@@ -261,8 +261,12 @@ const TVCore = (() => {
       playLocalAt(ch, Date.now(), t);
     }
 
+    // Other copies of the scheduled episode (from the catalog) that aren't resting after a failure.
+    const copiesOf = (f) => (f.alternates || []).filter((a) => health.usable(keyOf(a)));
+
     // Plays what the schedule says is on at `at`. opts (from recovery): { file, offset } plays that
-    // instead in this slot; retries / altTried / tried count what's been attempted for it.
+    // instead in this slot (copy: it's another copy of the same episode, not a stand-in); retries /
+    // tried count what's been attempted for it.
     function playLocalAt(ch, at, t, opts = {}) {
       clearTimeout(blockTimer);
       clearTimeout(slotTimer);
@@ -271,25 +275,29 @@ const TVCore = (() => {
       const scheduled = loc.item.file;
       const slotStart = Math.round(at - loc.offset * 1000);
       const slotEnd = slotStart + Math.round(loc.item.dur * 1000);
-      const cur = { ch, t, loc, scheduled, slotStart, slotEnd, retries: opts.retries || 0, altTried: opts.altTried || 0, tried: opts.tried || [], reason: opts.reason };
+      const cur = { ch, t, loc, scheduled, slotStart, slotEnd, retries: opts.retries || 0, copy: !!opts.copy, tried: opts.tried || [], reason: opts.reason };
       cur.file = opts.file || scheduled;
       cur.offset = opts.file ? opts.offset || 0 : loc.offset;
-      // The scheduled source failed recently and is resting: go straight to a stand-in.
+      // The scheduled source failed recently and is resting: go straight to another copy of it, or
+      // a stand-in.
       if (!opts.file && !opts.force && !health.usable(keyOf(scheduled))) {
-        const sub = standIn(cur, []);
-        if (!sub) return standbyUntil(cur);
-        cur.file = sub.file;
-        cur.offset = sub.offset;
+        const copy = copiesOf(scheduled)[0];
+        const sub = copy ? null : standIn(cur, []);
+        if (!copy && !sub) return standbyUntil(cur);
+        cur.file = copy || sub.file;
+        cur.offset = copy ? loc.offset : sub.offset;
+        cur.copy = !!copy;
         cur.reason = 'scheduled video is unavailable';
       }
-      localNow = { ch, loc, file: cur.file, sub: cur.file !== scheduled ? { original: scheduled } : null, slotStart, slotEnd };
-      if (loc.item.kind === 'show') logAired(ch, scheduled, cur.file, cur.reason);
+      const standingIn = cur.file !== scheduled && !cur.copy;
+      localNow = { ch, loc, file: cur.file, sub: standingIn ? { original: scheduled } : null, slotStart, slotEnd };
+      if (loc.item.kind === 'show') logAired(ch, scheduled, cur.file, cur.reason, cur.copy);
       // A time block starting (or ending) mid-show cuts over, like the real schedule did.
       const untilSwitch = loc.contextEnd - Date.now();
       if (untilSwitch < (loc.item.dur - loc.offset) * 1000 && untilSwitch < 2 ** 31 - 1) {
         blockTimer = setTimeout(() => t === token && playLocalAt(ch, Date.now() + 250, t), Math.max(0, untilSwitch) + 100);
       }
-      // A stand-in only fills its slot; then the schedule carries on as planned.
+      // A stand-in (or another copy) only fills its slot; then the schedule carries on as planned.
       if (cur.file !== scheduled) slotTimer = setTimeout(() => t === token && playLocalAt(ch, Date.now() + 250, t), Math.max(0, slotEnd - Date.now()) + 100);
       stopItem();
       standby(null);
@@ -352,15 +360,18 @@ const TVCore = (() => {
       clearTimeout(loadTimer);
       const { ch, t } = cur;
       health.fail(keyOf(cur.file), { reason, permanent, kind: p.kindOf(cur.file) });
-      const alternates = (cur.scheduled.alternates || []).length;
-      const step = cur.file === cur.scheduled || cur.altTried ? Health.nextStep({ retries: cur.retries, permanent, alternates, alternatesTried: cur.altTried }) : 'substitute';
+      const tried = [...cur.tried, keyOf(cur.file)];
+      // Only the scheduled file is retried, and only the episode (not a stand-in) has copies.
+      const isScheduled = cur.file === cur.scheduled;
+      const copies = isScheduled || cur.copy ? copiesOf(cur.scheduled).filter((a) => !tried.includes(keyOf(a))) : [];
+      const step = Health.nextStep({ retries: isScheduled ? cur.retries : Infinity, permanent, alternates: copies.length });
       if (step === 'retry') return playLocalAt(ch, Date.now(), t, { retries: cur.retries + 1, force: true, reason });
       if (step === 'alternate') {
-        return playLocalAt(ch, Date.now(), t, { file: cur.scheduled.alternates[cur.altTried], offset: (Date.now() - cur.slotStart) / 1000, altTried: cur.altTried + 1, retries: cur.retries, reason });
+        return playLocalAt(ch, Date.now(), t, { file: copies[0], copy: true, offset: (Date.now() - cur.slotStart) / 1000, tried, retries: cur.retries, reason });
       }
       const sub = standIn(cur, [keyOf(cur.file)]);
       if (!sub) return standbyUntil(cur);
-      playLocalAt(ch, Date.now(), t, { file: sub.file, offset: sub.offset, tried: [...cur.tried, keyOf(cur.file)], retries: 99, reason });
+      playLocalAt(ch, Date.now(), t, { file: sub.file, offset: sub.offset, tried, retries: 99, reason });
     }
 
     // Whatever was playing in the slot finished. A stand-in shorter than its slot hands over to

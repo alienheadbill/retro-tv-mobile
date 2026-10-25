@@ -202,6 +202,7 @@ const PhoneLib = (() => {
         rating: v.rating || null,
         dur: v.dur,
         stream: `${home.url}/media/${v.id}?k=${encodeURIComponent(home.token)}`,
+        alternates: v.alternates ? fromPc(v.alternates) : undefined,
       }));
     for (const ch of locals) {
       const p = pc.find((c) => c.number === ch.number);
