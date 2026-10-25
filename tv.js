@@ -1,8 +1,7 @@
 'use strict';
-// The phone TV. Same behaviour as the desktop TV (src/app.js): channels already on when you tune
-// in, static between channels, banner, guide, profiles. Different plumbing: videos come from
-// on-device storage (or stream from the archive), live channels are embedded players, and
-// it's driven by touch.
+// The phone TV: the shared TV (src/tv-core.js, the same as the PC's) with the phone's own players
+// and controls. Videos come from on-device storage or stream from a PC, YouTube plays in its
+// embedded player, live channels are the sites' embeddable players, and it's driven by touch.
 
 const $ = (s) => document.querySelector(s);
 const screenEl = $('#screen');
@@ -24,202 +23,11 @@ const store = {
   },
 };
 
-const state = {
-  settings: {},
-  all: [],
-  channels: [],
-  profile: null,
-  scheduledProfile: null,
-  index: 0,
-  last: null,
-  muted: false,
-  cycles: new Map(),
-  status: new Map(), // Twitch on-air status by channel number
-  on: false, // powered on (first tap done)
-};
-
-let token = 0;
-let live = null; // { frame, ch }
-let localNow = null; // { ch, loc, file, sub, slotStart, slotEnd }
+let live = null; // { frame, ch } or { youtube: true, ch }
 let objectUrl = null;
+let filePlay = null; // { stallTimer }
 
-// ---------- Playback health (src/health.js, the same as the PC's) ----------
-// A failed source rests before it's tried again, and the schedule never changes because of it:
-// its time slot gets a stand-in instead (the same one the PC would pick).
-
-const health = Health.monitor({ records: store.get('health', {}) });
-const keyOf = (f) => f.key || f.url;
-const kindOf = (f) => (f.youtube ? 'youtube' : f.stream ? 'remote' : 'file');
-setInterval(() => health.takeChanged() && store.set('health', health.all(300)), 5000);
-
-// ---------- Schedules ----------
-
-const viewed = new Map();
-const lookup = (n) => viewed.get(n) || null;
-const durationOf = (f) => f.dur || 0;
-
-function cycleFor(ch) {
-  if (!state.cycles.has(ch.number)) {
-    const breaks = { bumpers: 1, commercials: 3, ...(state.settings.breaks || {}), ...(ch.breaks || {}) };
-    state.cycles.set(ch.number, Schedule.build(withOrder(ch), durationOf, breaks, lookup));
-  }
-  return state.cycles.get(ch.number);
-}
-
-// Sports and wrestling channels ("order": "grouped") play in history order or at random; ORDER
-// on the remote switches the channel you're on. Series and events stay in order either way.
-function withOrder(ch) {
-  const pref = ch.order === 'grouped' ? store.get('order.' + ch.number, null) : null;
-  if (!pref) return ch;
-  return { ...ch, groupOrder: pref === 'history' ? ch.historyOrder || 'date' : 'shuffle' };
-}
-
-function toggleOrder() {
-  const ch = state.channels[state.index];
-  if (!ch || ch.order !== 'grouped') return flashOsd('ORDER', 'THIS CHANNEL ALWAYS PLAYS AT RANDOM', 2500);
-  const next = withOrder(ch).groupOrder === 'shuffle' ? 'history' : 'random';
-  store.set('order.' + ch.number, next);
-  state.cycles.delete(ch.number);
-  tune(state.index, { quiet: true });
-  flashOsd(next === 'history' ? 'IN HISTORY ORDER' : 'AT RANDOM', ch.name.toUpperCase(), 3000);
-}
-
-const showLabel = (p) => (p.show && p.show !== p.title && !p.title.startsWith(p.show) ? `${p.show}: ${p.title}` : p.title);
-
-function listings(ch, from, to) {
-  if (ch.type === 'local') {
-    const sub = localNow && localNow.ch.number === ch.number && localNow.sub ? localNow : null;
-    return Schedule.listings(cycleFor(ch), from, to).map((p) =>
-      sub && Math.abs(p.start - sub.slotStart) < 2000 ? { ...p, title: `${showLabel(sub.file)} (stand-in)`, substituted: true } : { ...p, title: showLabel(p) }
-    );
-  }
-  if (!navigator.onLine) return [{ live: true, off: true, title: 'No signal: no internet', start: from, end: to }];
-  const st = state.status.get(ch.number);
-  const off = !!st && !st.online;
-  return [{ live: true, off, title: (!off && st && st.title) || ch.description || ch.name, start: from, end: to }];
-}
-
-// ---------- Tuning ----------
-
-function teardown() {
-  clearTimeout(blockTimer);
-  clearTimeout(slotTimer);
-  clearTimeout(loadTimer);
-  if (live) {
-    live.frame.remove();
-    live = null;
-  }
-  stopYouTube();
-  localVideo.onloadedmetadata = localVideo.onended = localVideo.onerror = localVideo.onplaying = null;
-  localVideo.pause();
-  localVideo.removeAttribute('src');
-  localVideo.load();
-  localVideo.classList.remove('on');
-  if (objectUrl) URL.revokeObjectURL(objectUrl);
-  objectUrl = null;
-  localNow = null;
-  standby(null);
-  document.body.classList.remove('live-on');
-}
-
-function standby(big, small = '') {
-  const el = $('#standby');
-  el.hidden = !big;
-  if (big) {
-    el.querySelector('.big').textContent = big;
-    el.querySelector('.small').textContent = small;
-  }
-}
-
-function tune(i, { quiet = false } = {}) {
-  const n = state.channels.length;
-  if (!n) return;
-  i = ((i % n) + n) % n;
-  if (i !== state.index) state.last = state.index;
-  state.index = i;
-  const ch = state.channels[i];
-  store.set('channel', ch.number);
-  const t = ++token;
-  Effects.snow(quiet ? 300 : 600, state.muted ? 0 : 0.8);
-  teardown();
-  showOsd(ch);
-  if (ch.type === 'local') playLocal(ch, t);
-  else playLive(ch, t);
-  setTimeout(() => t === token && showBanner(), 700);
-}
-
-function tuneNumber(num) {
-  const i = state.channels.findIndex((c) => c.number === num);
-  if (i >= 0) tune(i);
-  else flashOsd(String(num).padStart(2, '0'), 'NO SIGNAL');
-}
-
-// ---------- Live channels: the sites' own embeddable players ----------
-
-function liveUrl(ch) {
-  if (ch.type === 'twitch') {
-    return `https://player.twitch.tv/?channel=${encodeURIComponent(ch.channel)}&parent=${encodeURIComponent(location.hostname)}&autoplay=true&muted=false`;
-  }
-  if (ch.type === 'youtube-live') {
-    // The stream found when the app was published; if it has restarted since, fall back to
-    // whatever the channel is streaming now.
-    return ch.videoId
-      ? `https://www.youtube.com/embed/${ch.videoId}?autoplay=1&playsinline=1&rel=0`
-      : `https://www.youtube.com/embed/live_stream?channel=${ch.channelId}&autoplay=1&playsinline=1`;
-  }
-  return new URL('/embed/video', ch.url).href; // owncast
-}
-
-function playLive(ch, t) {
-  if (!navigator.onLine) return standby('NO SIGNAL', 'No internet. The channels on your phone still work.');
-  const st = state.status.get(ch.number);
-  if (st && !st.online) return standby('OFF THE AIR', st.gone ? `${ch.name} has signed off for good` : `${ch.name} isn't broadcasting right now`);
-  // YouTube streams go through the same controllable player as scheduled YouTube channels
-  // (captions off, swipes work once it's playing). If that stream has ended, fall back to whatever
-  // the channel is streaming now.
-  if (ch.type === 'youtube-live' && ch.videoId && !ch.fallback) {
-    return playYouTube({ youtube: ch.videoId }, null, () => t === token && tune(state.index, { quiet: true }), () => {
-      if (t !== token) return;
-      stopYouTube();
-      playLive({ ...ch, fallback: true, videoId: null }, t);
-    }, t);
-  }
-  const frame = document.createElement('iframe');
-  frame.src = liveUrl(ch);
-  frame.allow = 'autoplay; fullscreen; encrypted-media; picture-in-picture';
-  frame.setAttribute('allowfullscreen', '');
-  frame.referrerPolicy = 'strict-origin-when-cross-origin';
-  screenEl.insertBefore(frame, $('#standby'));
-  live = { frame, ch };
-  // Taps go to the site's player (to press its play button), so the remote stays reachable.
-  document.body.classList.add('live-on');
-  if (ch.type === 'twitch') refreshStatus(ch).then((s) => t === token && s && !s.online && tune(state.index, { quiet: true }));
-}
-
-const TWITCH_WEB_CLIENT_ID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
-async function refreshStatus(ch) {
-  if (ch.type !== 'twitch' || !navigator.onLine) return null;
-  try {
-    const res = await fetch('https://gql.twitch.tv/gql', {
-      method: 'POST',
-      headers: { 'Client-ID': TWITCH_WEB_CLIENT_ID, 'Content-Type': 'text/plain' },
-      body: JSON.stringify({ query: 'query($login: String!) { user(login: $login) { stream { title } } }', variables: { login: ch.channel } }),
-    });
-    const user = (await res.json()).data.user;
-    const s = !user ? { online: false, gone: true, title: '' } : { online: !!user.stream, title: user.stream ? user.stream.title : '' };
-    state.status.set(ch.number, s);
-    return s;
-  } catch {
-    return null;
-  }
-}
-
-// ---------- Your own videos ----------
-
-async function playLocal(ch, t) {
-  if (!ch.episodes.length) return standby('NO SHOWS YET', 'Add videos in the menu');
-  playLocalAt(ch, Date.now(), t);
-}
+// ---------- Videos (on this device, or streamed from a PC) ----------
 
 async function resolveUrl(file) {
   if (file.stream) return file.stream;
@@ -230,124 +38,64 @@ async function resolveUrl(file) {
   return objectUrl;
 }
 
-let blockTimer = 0;
-let slotTimer = 0;
-let loadTimer = 0;
-
-// Plays what the schedule says is on at `at`. opts (from recovery): { file, offset } plays that
-// instead in this time slot; retries / tried count what's been attempted for it.
-async function playLocalAt(ch, at, t, opts = {}) {
-  clearTimeout(blockTimer);
-  clearTimeout(slotTimer);
-  clearTimeout(loadTimer);
-  const loc = Schedule.locate(cycleFor(ch), at);
-  if (!loc) return standby('NO SIGNAL', "None of this channel's videos would play");
-  const scheduled = loc.item.file;
-  const slotStart = Math.round(at - loc.offset * 1000);
-  const slotEnd = slotStart + Math.round(loc.item.dur * 1000);
-  const cur = { ch, t, loc, scheduled, slotStart, slotEnd, retries: opts.retries || 0, tried: opts.tried || [] };
-  cur.file = opts.file || scheduled;
-  cur.offset = opts.file ? opts.offset || 0 : loc.offset;
-  if (!opts.file && !opts.force && !health.usable(keyOf(scheduled))) {
-    const sub = standIn(cur, []);
-    if (!sub) return standbyUntil(cur);
-    cur.file = sub.file;
-    cur.offset = sub.offset;
-  }
-  localNow = { ch, loc, file: cur.file, sub: cur.file !== scheduled ? { original: scheduled } : null, slotStart, slotEnd };
-  const untilSwitch = loc.contextEnd - Date.now();
-  if (untilSwitch < (loc.item.dur - loc.offset) * 1000 && untilSwitch < 2 ** 31 - 1) {
-    blockTimer = setTimeout(() => t === token && playLocalAt(ch, Date.now() + 250, t), Math.max(0, untilSwitch) + 100);
-  }
-  if (cur.file !== scheduled) slotTimer = setTimeout(() => t === token && playLocalAt(ch, Date.now() + 250, t), Math.max(0, slotEnd - Date.now()) + 100);
-  standby(null);
-  const file = cur.file;
-  const started = Date.now();
-  const ok = () => t === token && health.ok(keyOf(file), { loadMs: Date.now() - started, kind: kindOf(file) });
-  // Not started after a while: a hiccup, like an error. (Waiting for the viewer's first tap,
-  // which iOS needs before anything can play with sound, doesn't count.)
-  const waitingForTap = () => document.body.classList.contains('yt-tap') || !$('#tap-play').hidden;
-  const watchStart = () => {
-    loadTimer = setTimeout(() => (t !== token ? null : waitingForTap() ? watchStart() : recover(cur, 'took too long to start')), file.youtube ? 30000 : 25000);
-  };
-  watchStart();
-  if (file.youtube) {
-    localVideo.pause();
-    localVideo.classList.remove('on');
-    return playYouTube(file, cur.offset, () => finished(cur), (code) => recover(cur, `YouTube error ${code || ''}`.trim(), [100, 101, 150].includes(code)), t, () => {
-      clearTimeout(loadTimer);
-      ok();
-    });
-  }
+async function playFile(cur, ctl) {
   stopYouTube();
   let url;
   try {
-    url = await resolveUrl(file);
+    url = await resolveUrl(cur.file);
   } catch {
-    return recover(cur, 'not on this device', true);
+    return ctl.failed('not on this device', true);
   }
-  if (t !== token) return;
+  if (!ctl.current()) return;
+  filePlay = { stallTimer: 0 };
+  const me = filePlay;
   localVideo.onloadedmetadata = () => {
-    if (t !== token) return;
+    if (!ctl.current()) return;
     localVideo.currentTime = Math.min(cur.offset, Math.max(0, (localVideo.duration || Infinity) - 1));
     play();
   };
   localVideo.onplaying = () => {
-    clearTimeout(loadTimer);
-    ok();
+    clearTimeout(me.stallTimer);
+    ctl.started();
   };
-  localVideo.onended = () => finished(cur);
-  localVideo.onerror = () => recover(cur, (localVideo.error && ['', 'stopped', 'network error', "couldn't decode", 'missing or unsupported'][localVideo.error.code]) || 'error', !!localVideo.error && localVideo.error.code === 3);
-  localVideo.muted = state.muted;
+  localVideo.onwaiting = () => {
+    if (!cur.ok) return;
+    clearTimeout(me.stallTimer);
+    me.stallTimer = setTimeout(() => ctl.current() && ctl.stalled(), 20000);
+  };
+  localVideo.onended = () => ctl.finished();
+  localVideo.onerror = () => ctl.failed((localVideo.error && ['', 'stopped', 'network error', "couldn't decode", 'missing or unsupported'][localVideo.error.code]) || 'error', !!localVideo.error && localVideo.error.code === 3);
+  localVideo.muted = tvc.state.muted;
   localVideo.src = url;
   localVideo.classList.add('on');
-  if (loc.item.kind === 'show' && cur.offset < 2) setTimeout(() => t === token && showBanner(), 1000);
 }
 
-// A stand-in for the slot (see src/health.js): same show first, same kind of program.
-function standIn(cur, exclude) {
-  const kind = cur.loc.item.kind;
-  const pool = kind === 'bumper' ? cur.ch.bumpers : kind === 'commercial' ? cur.ch.commercials : cur.ch.episodes;
-  const file = Health.substitute(cur.scheduled, pool, { usable: health.usable, seed: `${cur.ch.number}|${cur.slotStart}`, exclude: [...cur.tried, ...exclude] });
-  if (!file) return null;
-  const elapsed = (Date.now() - cur.slotStart) / 1000;
-  return { file, offset: (file.dur || 0) > elapsed + 30 ? Math.max(0, elapsed) : 0 };
-}
-
-function standbyUntil(cur) {
-  localNow = { ch: cur.ch, loc: cur.loc, file: cur.scheduled, sub: null, slotStart: cur.slotStart, slotEnd: cur.slotEnd };
+function stopItem() {
   stopYouTube();
+  if (filePlay) clearTimeout(filePlay.stallTimer);
+  filePlay = null;
+  localVideo.onloadedmetadata = localVideo.onended = localVideo.onerror = localVideo.onplaying = localVideo.onwaiting = null;
   localVideo.pause();
+  localVideo.removeAttribute('src');
+  localVideo.load();
   localVideo.classList.remove('on');
-  standby('PLEASE STAND BY', "We'll be right back");
-  slotTimer = setTimeout(() => cur.t === token && playLocalAt(cur.ch, Date.now() + 250, cur.t), Math.max(0, cur.slotEnd - Date.now()) + 100);
+  if (objectUrl) URL.revokeObjectURL(objectUrl);
+  objectUrl = null;
 }
 
-// Something in a slot failed: try it again once, then a stand-in for the rest of the slot.
-function recover(cur, reason, permanent = false) {
-  if (cur.t !== token || cur.done) return;
-  cur.done = true;
-  clearTimeout(loadTimer);
-  health.fail(keyOf(cur.file), { reason, permanent, kind: kindOf(cur.file) });
-  const step = cur.file === cur.scheduled ? Health.nextStep({ retries: cur.retries, permanent }) : 'substitute';
-  if (step === 'retry') return playLocalAt(cur.ch, Date.now(), cur.t, { retries: cur.retries + 1, force: true });
-  const sub = standIn(cur, [keyOf(cur.file)]);
-  if (!sub) return standbyUntil(cur);
-  playLocalAt(cur.ch, Date.now(), cur.t, { file: sub.file, offset: sub.offset, tried: [...cur.tried, keyOf(cur.file)], retries: 99 });
+// iOS only lets a video play with sound after a tap. If it refuses, ask for one.
+function play() {
+  localVideo.play().then(
+    () => ($('#tap-play').hidden = true),
+    () => ($('#tap-play').hidden = false)
+  );
 }
+$('#tap-play').addEventListener('click', () => {
+  $('#tap-play').hidden = true;
+  localVideo.play().catch(() => {});
+});
 
-function finished(cur) {
-  if (cur.t !== token || cur.done) return;
-  cur.done = true;
-  if (cur.file !== cur.scheduled && Date.now() < cur.slotEnd - 3000) {
-    const sub = standIn(cur, [keyOf(cur.file)]);
-    if (!sub) return standbyUntil(cur);
-    return playLocalAt(cur.ch, Date.now(), cur.t, { file: sub.file, offset: 0, tried: [...cur.tried, keyOf(cur.file)], retries: 99 });
-  }
-  playLocalAt(cur.ch, Date.now() + 750, cur.t);
-}
-
-// ---------- YouTube videos on scheduled channels ----------
+// ---------- YouTube ----------
 
 // One YouTube player, reused for every video: iOS remembers that it was allowed to play with
 // sound, so only the very first video needs a tap.
@@ -395,7 +143,7 @@ window.addEventListener('orientationchange', () => [150, 500, 1000].forEach((ms)
 // frame is shown, not the show's crop (which would cut off the ad's Skip button), and taps go to
 // the player so Skip can be tapped.
 let ytAdWatch = 0;
-function watchForAds(file, t) {
+function watchForAds(file, isCurrent) {
   clearInterval(ytAdWatch);
   document.body.classList.remove('yt-ad');
   const crop = file.crop || null;
@@ -408,10 +156,10 @@ function watchForAds(file, t) {
     ytCrop = on ? null : crop;
     layoutYouTube();
     document.body.classList.toggle('yt-ad', on);
-    if (on) flashOsd('COMMERCIAL', 'TAP SKIP ON THE PICTURE WHEN IT SHOWS UP', 4000);
+    if (on) tvc.flashOsd('COMMERCIAL', 'TAP SKIP ON THE PICTURE WHEN IT SHOWS UP', 4000);
   };
   ytAdWatch = setInterval(() => {
-    if (t !== token || !ytPlayer || !ytPlayer.getPlayerState) return;
+    if (!isCurrent() || !ytPlayer || !ytPlayer.getPlayerState) return;
     if (ytPlayer.getPlayerState() !== YT.PlayerState.PLAYING) return;
     const now = ytPlayer.getCurrentTime();
     const len = ytPlayer.getDuration();
@@ -422,33 +170,34 @@ function watchForAds(file, t) {
   }, 1000);
 }
 
-async function playYouTube(file, offset, onEnd, onError, t, onPlay) {
+// Plays a YouTube video in the shared player. offset null = a live stream (joined live).
+// on: { isCurrent(), play(), end(), error(code) }
+async function ytPlay(file, offset, on) {
   const host = $('#yt-host');
   host.hidden = false;
   ytCrop = file.crop || null;
   layoutYouTube();
-  watchForAds(file, t);
+  watchForAds(file, on.isCurrent);
   ytHandlers = {
     state: (e) => {
-      if (t !== token) return;
-      if (e.data === YT.PlayerState.ENDED) onEnd();
+      if (!on.isCurrent()) return;
+      if (e.data === YT.PlayerState.ENDED) on.end();
       if (e.data === YT.PlayerState.PLAYING) {
         captionsOff();
-        if (onPlay) onPlay();
+        on.play();
       }
       // Until it plays, taps go to YouTube's own play button.
       document.body.classList.toggle('yt-tap', e.data !== YT.PlayerState.PLAYING && e.data !== YT.PlayerState.BUFFERING);
     },
-    error: (e) => t === token && onError(e && e.data),
+    error: (e) => on.isCurrent() && on.error(e && e.data),
   };
-  // offset null = a live stream: join it live rather than seeking.
   const start = offset == null ? undefined : Math.floor(offset);
   try {
     await loadYouTubeApi();
   } catch {
-    return onError();
+    return on.error();
   }
-  if (t !== token) return;
+  if (!on.isCurrent()) return;
   if (!ytPlayer) {
     ytPlayer = new YT.Player('yt-player', {
       videoId: file.youtube,
@@ -461,7 +210,7 @@ async function playYouTube(file, offset, onEnd, onError, t, onPlay) {
       events: {
         onReady: () => {
           layoutYouTube();
-          if (state.muted) ytPlayer.mute();
+          if (tvc.state.muted) ytPlayer.mute();
         },
         onStateChange: (e) => ytHandlers.state && ytHandlers.state(e),
         onError: (e) => ytHandlers.error && ytHandlers.error(e),
@@ -470,8 +219,20 @@ async function playYouTube(file, offset, onEnd, onError, t, onPlay) {
     document.body.classList.add('yt-tap');
   } else {
     ytPlayer.loadVideoById(start != null ? { videoId: file.youtube, startSeconds: start } : { videoId: file.youtube });
-    state.muted ? ytPlayer.mute() : ytPlayer.unMute();
+    tvc.state.muted ? ytPlayer.mute() : ytPlayer.unMute();
   }
+}
+
+// A scheduled YouTube video.
+function playYouTube(cur, ctl) {
+  localVideo.pause();
+  localVideo.classList.remove('on');
+  ytPlay(cur.file, cur.offset, {
+    isCurrent: ctl.current,
+    play: ctl.started,
+    end: ctl.finished,
+    error: (code) => ctl.failed(`YouTube error ${code || ''}`.trim(), [100, 101, 150].includes(code)),
+  });
 }
 
 // YouTube turns captions on for some videos (and remembers it); switch them off each time.
@@ -492,121 +253,113 @@ function stopYouTube() {
   if (host) host.hidden = true;
 }
 
-// iOS only lets a video play with sound after a tap. If it refuses, ask for one.
-function play() {
-  localVideo.play().then(
-    () => ($('#tap-play').hidden = true),
-    () => ($('#tap-play').hidden = false)
-  );
+// ---------- Live channels: the sites' own embeddable players ----------
+
+function liveUrl(ch) {
+  if (ch.type === 'twitch') {
+    return `https://player.twitch.tv/?channel=${encodeURIComponent(ch.channel)}&parent=${encodeURIComponent(location.hostname)}&autoplay=true&muted=false`;
+  }
+  if (ch.type === 'youtube-live') {
+    // The stream found when the app was published; if it has restarted since, fall back to
+    // whatever the channel is streaming now.
+    return ch.videoId
+      ? `https://www.youtube.com/embed/${ch.videoId}?autoplay=1&playsinline=1&rel=0`
+      : `https://www.youtube.com/embed/live_stream?channel=${ch.channelId}&autoplay=1&playsinline=1`;
+  }
+  return new URL('/embed/video', ch.url).href; // owncast
 }
-$('#tap-play').addEventListener('click', () => {
-  $('#tap-play').hidden = true;
-  localVideo.play().catch(() => {});
+
+function playLive(ch, t) {
+  if (!navigator.onLine) return tvc.standby('NO SIGNAL', 'No internet. The channels on your phone still work.');
+  const st = tvc.state.status.get(ch.number);
+  if (st && !st.online) return tvc.offAir(ch, st);
+  const isCurrent = () => t === tvc.token;
+  // YouTube streams go through the same controllable player as scheduled YouTube channels
+  // (captions off, swipes work once it's playing). If that stream has ended, fall back to whatever
+  // the channel is streaming now.
+  if (ch.type === 'youtube-live' && ch.videoId && !ch.fallback) {
+    live = { youtube: true, ch };
+    return ytPlay({ youtube: ch.videoId }, null, {
+      isCurrent,
+      play: () => tvc.health.ok('live:' + ch.number, { kind: ch.type }),
+      end: () => isCurrent() && tvc.tune(tvc.state.index, { quiet: true }),
+      error: () => {
+        if (!isCurrent()) return;
+        stopYouTube();
+        playLive({ ...ch, fallback: true, videoId: null }, t);
+      },
+    });
+  }
+  const frame = document.createElement('iframe');
+  frame.src = liveUrl(ch);
+  frame.allow = 'autoplay; fullscreen; encrypted-media; picture-in-picture';
+  frame.setAttribute('allowfullscreen', '');
+  frame.referrerPolicy = 'strict-origin-when-cross-origin';
+  screenEl.insertBefore(frame, $('#standby'));
+  live = { frame, ch };
+  // Taps go to the site's player (to press its play button), so the remote stays reachable.
+  document.body.classList.add('live-on');
+  if (ch.type === 'twitch') tvc.refreshStatus(ch).then((s) => isCurrent() && s && !s.online && tvc.tune(tvc.state.index, { quiet: true }));
+}
+
+function stopLive() {
+  if (live && live.frame) live.frame.remove();
+  if (live && live.youtube) stopYouTube();
+  live = null;
+  document.body.classList.remove('live-on');
+}
+
+const TWITCH_WEB_CLIENT_ID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
+async function twitchStatus(ch) {
+  if (ch.type !== 'twitch' || !navigator.onLine) return null;
+  try {
+    const res = await fetch('https://gql.twitch.tv/gql', {
+      method: 'POST',
+      headers: { 'Client-ID': TWITCH_WEB_CLIENT_ID, 'Content-Type': 'text/plain' },
+      body: JSON.stringify({ query: 'query($login: String!) { user(login: $login) { stream { title } } }', variables: { login: ch.channel } }),
+    });
+    const user = (await res.json()).data.user;
+    return !user ? { online: false, gone: true, title: '' } : { online: !!user.stream, title: user.stream ? user.stream.title : '' };
+  } catch {
+    return null;
+  }
+}
+
+// ---------- Sound ----------
+
+function applyVolume() {
+  const muted = tvc.state.muted;
+  localVideo.muted = muted;
+  if (ytPlayer && ytPlayer.mute) muted ? ytPlayer.mute() : ytPlayer.unMute();
+}
+
+// ---------- The shared TV ----------
+
+const tvc = TVCore.create({
+  store,
+  durationOf: (f) => f.dur || 0,
+  kindOf: (f) => (f.youtube ? 'youtube' : f.stream ? 'remote' : 'file'),
+  playFile,
+  playYouTube,
+  stopItem,
+  playLive,
+  stopLive,
+  hasStatus: (ch) => ch.type === 'twitch',
+  status: twitchStatus,
+  applyVolume,
+  showVolume: () => tvc.flashOsd(tvc.state.muted ? 'MUTE' : 'SOUND ON', '', 1500),
+  snowVolume: () => 0.8,
+  // Waiting for the viewer's first tap (iOS) isn't a video failing to start.
+  waitingForViewer: () => document.body.classList.contains('yt-tap') || !$('#tap-play').hidden,
+  noShows: () => ['NO SHOWS YET', 'Add videos in the menu'],
+  guide: { scroll: true },
+  healthLimit: 300,
 });
+tvc.state.on = false; // powered on (the first tap done)
 
-function toggleMute() {
-  state.muted = !state.muted;
-  localVideo.muted = state.muted;
-  if (ytPlayer && ytPlayer.mute) state.muted ? ytPlayer.mute() : ytPlayer.unMute();
-  flashOsd(state.muted ? 'MUTE' : 'SOUND ON', '', 1500);
-}
-
-// ---------- On-screen display ----------
-
-let osdTimer = 0;
-function flashOsd(big, small, ms = 3000) {
-  const el = $('#osd');
-  el.querySelector('.ch').textContent = big;
-  el.querySelector('.name').textContent = small;
-  el.classList.add('on');
-  clearTimeout(osdTimer);
-  osdTimer = setTimeout(() => el.classList.remove('on'), ms);
-}
-
-const showOsd = (ch) => flashOsd(`CH ${String(ch.number).padStart(2, '0')}`, ch.name.toUpperCase());
-
-let bannerTimer = 0;
-function showBanner() {
-  const ch = state.channels[state.index];
-  if (!ch) return;
-  const el = $('#banner');
-  const now = Date.now();
-  const time = (ms) => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-  let netText = ch.name;
-  let nowText;
-  let nextText = '';
-  let progress = null;
-  if (ch.type === 'local' && localNow && localNow.ch.number === ch.number) {
-    const lst = Schedule.listings(cycleFor(ch), now, now + 6 * 3600e3);
-    const cur = lst[0];
-    const nxt = lst[1];
-    const file = localNow.file || localNow.loc.item.file;
-    if (cur.block) netText += ` · ${cur.block}`;
-    nowText = localNow.loc.item.kind === 'show' ? showLabel(cur) : `${showLabel(cur)} (commercial break)`;
-    if (localNow.sub && localNow.loc.item.kind === 'show') nowText = `${showLabel(file)} (standing in for ${showLabel(localNow.sub.original)})`;
-    if (cur.broadcast) {
-      const aired = file.airDate ? new Date(file.airDate + 'T12:00').toLocaleDateString([], { year: 'numeric', month: 'long', day: 'numeric' }) : file.year;
-      nextText = ['Original broadcast', file.network, aired && `aired ${aired}`].filter(Boolean).join(' · ');
-    } else if (nxt) nextText = `Up next at ${time(nxt.start)}: ${showLabel(nxt)}`;
-    progress = Math.min(1, (now - cur.start) / (cur.end - cur.start));
-  } else {
-    const l = listings(ch, now, now + 1)[0];
-    nowText = l ? l.title : ch.name;
-    nextText = ch.type === 'local' || (l && l.off) ? '' : 'LIVE';
-  }
-  el.replaceChildren();
-  const div = (cls, text) => Object.assign(document.createElement('div'), { className: cls, textContent: text });
-  const mid = div('mid', '');
-  mid.append(div('net', netText), div('now', nowText), div(nextText === 'LIVE' ? 'next live' : 'next', nextText));
-  if (progress != null) {
-    const bar = div('bar', '');
-    const fill = document.createElement('i');
-    fill.style.width = progress * 100 + '%';
-    bar.append(fill);
-    mid.append(bar);
-  }
-  el.append(div('num', String(ch.number).padStart(2, '0')), mid, div('clock', time(now)));
-  el.classList.add('on');
-  clearTimeout(bannerTimer);
-  bannerTimer = setTimeout(() => el.classList.remove('on'), 5000);
-}
-
-// ---------- Profiles and PIN ----------
+// ---------- Profiles and PIN (touch) ----------
 
 const menu = $('#menu');
-const profiles = () => state.settings.profiles || {};
-const currentProfile = () => profiles()[state.profile] || null;
-
-function applyProfile() {
-  const p = currentProfile();
-  const curNum = state.channels[state.index] && state.channels[state.index].number;
-  viewed.clear();
-  for (const ch of state.all) {
-    if (ch.type === 'local') viewed.set(ch.number, { ...ch, episodes: ch.episodes.filter((f) => Profiles.allowsFile(p, f, ch)) });
-  }
-  state.channels = state.all
-    .map((ch) => (ch.type === 'local' ? viewed.get(ch.number) : ch))
-    .filter((ch) => Profiles.allowsChannel(p, ch) && (ch.type !== 'local' || ch.episodes.length));
-  state.cycles.clear();
-  const i = state.channels.findIndex((c) => c.number === curNum);
-  state.index = i >= 0 ? i : 0;
-  state.last = null;
-  return i >= 0;
-}
-
-function setProfile(id) {
-  if (!profiles()[id]) return;
-  state.profile = id;
-  store.set('profile', id);
-  const kept = applyProfile();
-  flashOsd(profiles()[id].label || id.toUpperCase(), 'PROFILE', 3000);
-  if (!state.channels.length) {
-    teardown();
-    return standby('NO CHANNELS', 'This profile has no channels with anything to watch');
-  }
-  if (!kept || !(localNow || live)) tune(state.index, { quiet: true });
-}
-
 const el = (tag, cls, text) => Object.assign(document.createElement(tag), { className: cls || '', textContent: text || '' });
 
 function closeMenu() {
@@ -616,7 +369,7 @@ function closeMenu() {
 
 // On-screen PIN pad. Resolves true for the right PIN; no PIN set means no lock.
 function askPin(reason) {
-  const pin = String(state.settings.pin || '');
+  const pin = String(tvc.state.settings.pin || '');
   if (!pin) return Promise.resolve(true);
   return new Promise((resolve) => {
     let typed = '';
@@ -649,17 +402,18 @@ function askPin(reason) {
 }
 
 function openProfileMenu() {
-  const ids = Object.keys(profiles());
-  if (!ids.length) return flashOsd('NO PROFILES', '', 2000);
+  const profiles = tvc.profiles();
+  const ids = Object.keys(profiles);
+  if (!ids.length) return tvc.flashOsd('NO PROFILES', '', 2000);
   menu.replaceChildren(el('h2', '', "WHO'S WATCHING?"));
   for (const id of ids) {
-    const p = profiles()[id];
-    const b = el('button', 'choice', `${(p.label || id).toUpperCase()}${p.locked ? '  (PIN)' : ''}${id === state.profile ? '  <' : ''}`);
+    const prof = profiles[id];
+    const b = el('button', 'choice', `${(prof.label || id).toUpperCase()}${prof.locked ? '  (PIN)' : ''}${id === tvc.state.profile ? '  <' : ''}`);
     b.addEventListener('click', async () => {
       closeMenu();
-      if (id === state.profile) return;
-      if (p.locked && !(await askPin(`UNLOCK ${(p.label || id).toUpperCase()}`))) return;
-      setProfile(id);
+      if (id === tvc.state.profile) return;
+      if (prof.locked && !(await askPin(`UNLOCK ${(prof.label || id).toUpperCase()}`))) return;
+      tvc.setProfile(id);
     });
     menu.append(b);
   }
@@ -670,24 +424,6 @@ function openProfileMenu() {
 }
 
 // ---------- Remote: buttons, number pad, swipes ----------
-
-let digits = '';
-let digitTimer = 0;
-function typeDigit(d) {
-  digits += d;
-  flashOsd(`CH ${digits.padEnd(2, '-')}`, '', 2000);
-  clearTimeout(digitTimer);
-  const maxNum = Math.max(...state.channels.map((c) => c.number));
-  const go = () => {
-    const n = Number(digits);
-    digits = '';
-    tuneNumber(n);
-  };
-  if (Number(digits + '0') > maxNum || digits.length >= 3) go();
-  else digitTimer = setTimeout(go, 1500);
-}
-
-const guideApi = () => ({ channels: state.channels, current: () => state.index, listings, tune: (i) => tune(i), scroll: true });
 
 // The phone guide gets a button to close it without changing the channel.
 (() => {
@@ -700,12 +436,12 @@ const guideApi = () => ({ channels: state.channels, current: () => state.index, 
 })();
 
 const actions = {
-  up: () => tune(state.index + 1),
-  down: () => tune(state.index - 1),
-  last: () => state.last != null && tune(state.last),
-  guide: () => (Guide.isOpen() ? Guide.close() : Guide.open(guideApi())),
-  info: () => showBanner(),
-  mute: () => toggleMute(),
+  up: () => tvc.tune(tvc.state.index + 1),
+  down: () => tvc.tune(tvc.state.index - 1),
+  last: () => tvc.state.last != null && tvc.tune(tvc.state.last),
+  guide: () => (Guide.isOpen() ? Guide.close() : Guide.open(tvc.guideApi())),
+  info: () => tvc.showBanner(),
+  mute: () => tvc.toggleMute(),
   profile: () => openProfileMenu(),
   crt: () => {
     const on = !document.body.classList.contains('crt');
@@ -715,13 +451,13 @@ const actions = {
   menu: async () => {
     if (await askPin('MENU')) Manage.open();
   },
-  order: toggleOrder,
+  order: () => tvc.toggleOrder(),
 };
 
 document.querySelectorAll('[data-act]').forEach((b) =>
   b.addEventListener('click', (e) => {
     e.stopPropagation();
-    if (!state.on) return;
+    if (!tvc.state.on) return;
     remoteShown();
     actions[b.dataset.act]();
   })
@@ -730,7 +466,7 @@ document.querySelectorAll('[data-digit]').forEach((b) =>
   b.addEventListener('click', (e) => {
     e.stopPropagation();
     remoteShown();
-    typeDigit(b.dataset.digit);
+    tvc.typeDigit(b.dataset.digit);
   })
 );
 
@@ -750,33 +486,36 @@ gesture.addEventListener('touchstart', (e) => {
   touch = { x: t.clientX, y: t.clientY, at: Date.now() };
 }, { passive: true });
 gesture.addEventListener('touchend', (e) => {
-  if (!touch || !state.on) return;
+  if (!touch || !tvc.state.on) return;
   const t = e.changedTouches[0];
   const dx = t.clientX - touch.x;
   const dy = t.clientY - touch.y;
   touch = null;
   if (Math.abs(dy) > 50 && Math.abs(dy) > Math.abs(dx) * 1.5) {
     if (Guide.isOpen()) Guide.scrollBy(dy < 0 ? 1 : -1);
-    else tune(state.index + (dy < 0 ? 1 : -1));
+    else tvc.tune(tvc.state.index + (dy < 0 ? 1 : -1));
   } else if (Math.abs(dx) < 15 && Math.abs(dy) < 15 && !Guide.isOpen()) {
-    showBanner();
+    tvc.showBanner();
     remoteShown();
   }
 });
-// Keyboards (an iPad with a keyboard) get the desktop keys.
+// Keyboards (an iPad with a keyboard) get the PC's keys.
 document.addEventListener('keydown', (e) => {
-  if (!state.on || !menu.hidden || Manage.isOpen()) return;
+  if (!tvc.state.on || !menu.hidden || Manage.isOpen()) return;
   if (Guide.isOpen() && Guide.key(e)) return;
   const k = e.key;
   if (k === 'ArrowUp' || k === 'PageUp') actions.up();
   else if (k === 'ArrowDown' || k === 'PageDown') actions.down();
-  else if (/^[0-9]$/.test(k)) typeDigit(k);
-  else if (k === 'Backspace') actions.last();
+  else if (/^[0-9]$/.test(k)) tvc.typeDigit(k);
+  else if (k === 'Enter' && tvc.enterDigits()) {
+    // tuned to the typed number
+  } else if (k === 'Backspace') actions.last();
   else if (k.toLowerCase() === 'g') actions.guide();
   else if (k.toLowerCase() === 'i' || k === 'Enter') actions.info();
   else if (k.toLowerCase() === 'm') actions.mute();
   else if (k.toLowerCase() === 'k') actions.profile();
   else if (k.toLowerCase() === 'c') actions.crt();
+  else if (k.toLowerCase() === 'o') actions.order();
   else return;
   e.preventDefault();
 });
@@ -790,71 +529,50 @@ async function keepAwake() {
   } catch {}
 }
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && state.on) {
+  if (document.visibilityState === 'visible' && tvc.state.on) {
     keepAwake();
     // Coming back to the app: catch up with the schedule, like a real TV would have.
-    if (!Manage.isOpen()) tune(state.index, { quiet: true });
+    if (!Manage.isOpen()) tvc.tune(tvc.state.index, { quiet: true });
   }
 });
 
 // ---------- Startup ----------
 
 async function reload() {
-  state.settings = PhoneLib.settings();
-  state.all = PhoneLib.tvChannels().sort((a, b) => a.number - b.number);
+  tvc.setLineup(PhoneLib.settings(), PhoneLib.tvChannels());
 }
 
+// For the menu, updates and problem reports.
 const TV = {
   // Library changed (videos added, channels edited): pick it up without losing the channel.
   async refresh() {
     await reload();
-    applyProfile();
-    if (state.on && !Manage.isOpen() && state.channels.length) tune(state.index, { quiet: true });
+    tvc.applyProfile();
+    if (tvc.state.on && !Manage.isOpen() && tvc.state.channels.length) tvc.tune(tvc.state.index, { quiet: true });
   },
   pause() {
-    token++;
-    teardown();
+    tvc.invalidate();
+    tvc.teardown();
     Guide.close();
   },
   resume() {
-    if (!state.on) return;
-    if (!state.channels.length) return standby('NO CHANNELS', 'Open the menu to add videos');
-    tune(state.index, { quiet: true });
+    if (!tvc.state.on) return;
+    if (!tvc.state.channels.length) return tvc.standby('NO CHANNELS', 'Open the menu to add videos');
+    tvc.tune(tvc.state.index, { quiet: true });
   },
   get state() {
-    return state;
+    return tvc.state;
   },
-  osd: flashOsd,
-  // For problem reports: what's on right now.
-  nowPlaying() {
-    if (!localNow) return null;
-    const { item } = localNow.loc;
-    const f = item.file;
-    return `${f.show ? f.show + ': ' : ''}${f.title}${item.kind !== 'show' ? ` (${item.kind})` : ''}${f.youtube ? ` [YouTube ${f.youtube}]` : f.stream ? ' [from a PC]' : ''}`;
-  },
+  osd: (...a) => tvc.flashOsd(...a),
+  nowPlaying: () => tvc.nowPlaying(),
 };
 
 async function boot() {
   await PhoneLib.load();
   await reload();
-  document.body.classList.toggle('crt', store.get('crt', state.settings.crt !== false));
-  const ids = Object.keys(profiles());
-  state.scheduledProfile = Profiles.scheduled(state.settings);
-  state.profile = [state.scheduledProfile, store.get('profile', null), state.settings.defaultProfile].find((id) => id && profiles()[id]) || ids[0] || null;
-  state.channels = [];
-  applyProfile();
-  const i = state.channels.findIndex((c) => c.number === store.get('channel', state.settings.startChannel));
-  state.index = i >= 0 ? i : 0;
-  state.all.filter((c) => c.type === 'twitch').forEach(refreshStatus);
-  setInterval(() => state.all.filter((c) => c.type === 'twitch').forEach(refreshStatus), 60000);
-  setInterval(() => {
-    const s = Profiles.scheduled(state.settings);
-    if (s && s !== state.scheduledProfile) {
-      state.scheduledProfile = s;
-      setProfile(s);
-    }
-  }, 30000);
-  PhoneLib.onChange(() => (Manage.isOpen() ? reload().then(applyProfile) : TV.refresh()));
+  document.body.classList.toggle('crt', store.get('crt', tvc.state.settings.crt !== false));
+  tvc.start();
+  PhoneLib.onChange(() => (Manage.isOpen() ? reload().then(() => tvc.applyProfile()) : TV.refresh()));
   Manage.offerPairing();
   window.addEventListener('online', () => TV.refresh());
   window.addEventListener('offline', () => TV.refresh());
@@ -862,12 +580,12 @@ async function boot() {
   // The first tap turns it on: iOS only allows sound after one.
   $('#power-on').addEventListener('click', () => {
     $('#power-on').hidden = true;
-    state.on = true;
+    tvc.state.on = true;
     localVideo.play().catch(() => {}); // lets this video element play with sound from now on
     keepAwake();
     Effects.power('on');
-    if (!state.channels.length) return standby('NO CHANNELS', 'Tap MENU to add videos');
-    tune(state.index, { quiet: true });
+    if (!tvc.state.channels.length) return tvc.standby('NO CHANNELS', 'Tap MENU to add videos');
+    tvc.tune(tvc.state.index, { quiet: true });
   });
 }
 
