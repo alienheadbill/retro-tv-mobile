@@ -492,7 +492,7 @@ const Manage = (() => {
     if (hs.paired) {
       const shows = (hs.lineup && hs.lineup.channels ? hs.lineup.channels : []).reduce((n, c) => n + c.episodes.length, 0);
       box.append(
-        h('b', null, `Connected to ${hs.paired.name}`),
+        h('b', null, hs.paired.shared ? `Shows shared from ${hs.paired.name}` : `Connected to ${hs.paired.name}`),
         h('p', { class: 'muted' }, hs.up ? `${shows} episodes from the PC are on their channels.` : `Can't reach ${hs.paired.name} right now. Its shows come back when it's on with the home server turned on.`),
         h('div', { class: 'row' },
           h('button', { class: 'btn', onclick: async () => {
@@ -500,7 +500,7 @@ const Manage = (() => {
             toast(r === 'ok' ? 'Up to date' : r === 'unpaired' ? 'The PC forgot this device. Connect again.' : "Couldn't reach the PC", r !== 'ok');
             renderSettings();
           } }, 'Check now'),
-          h('button', { class: 'btn danger', onclick: async () => {
+          hs.paired.shared ? null : h('button', { class: 'btn danger', onclick: async () => {
             await PhoneLib.forgetHome();
             toast('Disconnected');
             renderSettings();

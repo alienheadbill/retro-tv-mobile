@@ -1,6 +1,6 @@
 // Offline support: the app itself is cached so it opens with no signal. Videos are stored by
 // the app in IndexedDB, and streams/archive requests always go to the network.
-const VERSION = '202610241934';
+const VERSION = '202610250001';
 const ASSETS = ["./","archive-core.js","config.js","db.js","effects.js","fonts/VT323-Regular.ttf","guide.js","icons/icon-180.png","icons/icon-192.png","icons/icon-512.png","index.html","manage.js","manifest.webmanifest","meta.js","phone-lib.js","phone.css","profiles.js","schedule.js","style.css","tv.js","update.js"];
 const CACHE = 'retrotv-' + VERSION;
 

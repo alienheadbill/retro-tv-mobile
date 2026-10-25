@@ -32,8 +32,11 @@ const PhoneLib = (() => {
     if (!/github\.io$/.test(location.hostname)) try {
       const r = await timed('api/hello', {}, 3000);
       const j = r.ok ? await r.json() : null;
-      if (j && j.app === 'retro-tv-home') homeHere = { url: new URL('.', location.href).href.replace(/\/$/, ''), name: j.name };
+      if (j && j.app === 'retro-tv-home') homeHere = { url: new URL('.', location.href).href.replace(/\/$/, ''), name: j.name, open: !!j.open };
     } catch {}
+    // No passcode needed: the PC this page came from, or the one the website shares with everyone.
+    if (!home && homeHere && homeHere.open) home = { url: homeHere.url, token: '', name: homeHere.name, shared: true };
+    if (!home && settings.publicServer) home = { url: String(settings.publicServer).replace(/\/+$/, ''), token: '', name: 'Shared shows', shared: true };
     if (home) await refreshHome(false);
     setInterval(() => refreshHome(), 5 * 60000);
     window.addEventListener('online', () => refreshHome());
@@ -47,7 +50,11 @@ const PhoneLib = (() => {
     let result = 'ok';
     try {
       const r = await timed(home.url + '/api/lineup', { headers: { Authorization: 'Bearer ' + home.token } });
-      if (r.status === 401) {
+      if (r.status === 401 && home.shared) {
+        // A shared PC that started asking for a passcode: its shows are just off for now.
+        homeUp = false;
+        result = 'unpaired';
+      } else if (r.status === 401) {
         // The PC forgot this phone (or got a new passcode and was told to forget it).
         home = null;
         homeUp = false;
@@ -58,6 +65,7 @@ const PhoneLib = (() => {
       } else {
         homeLineup = await r.json();
         homeUp = true;
+        if (homeLineup.name) home.name = homeLineup.name;
         await DB.set('homeLineup', homeLineup);
       }
     } catch {
@@ -250,7 +258,7 @@ const PhoneLib = (() => {
     putEntry,
     removeEntry,
     onChange: (fn) => listeners.add(fn),
-    home: () => ({ paired: home ? { name: home.name, url: home.url } : null, here: homeHere, up: homeUp, lineup: homeLineup }),
+    home: () => ({ paired: home ? { name: home.name, url: home.url, shared: !!home.shared } : null, here: homeHere, up: homeUp, lineup: homeLineup }),
     pairHome,
     forgetHome,
     refreshHome,
