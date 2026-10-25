@@ -21,6 +21,16 @@ const Report = (() => {
     const lines = [`Version: ${(window.RTV_DEFAULTS || {}).version}`, `Device: ${navigator.userAgent}`, `Screen: ${innerWidth}x${innerHeight} (${matchMedia('(orientation: landscape)').matches ? 'sideways' : 'upright'})`];
     lines.push(`Installed on Home Screen: ${navigator.standalone || matchMedia('(display-mode: standalone)').matches ? 'yes' : 'no'}`, `Online: ${navigator.onLine ? 'yes' : 'no'}`);
     try {
+      const vv = window.visualViewport;
+      const box = (sel) => {
+        const el = document.querySelector(sel);
+        if (!el) return 'none';
+        const r = el.getBoundingClientRect();
+        return `${Math.round(r.left)},${Math.round(r.top)} ${Math.round(r.width)}x${Math.round(r.height)}`;
+      };
+      lines.push(`Zoom: ${vv ? vv.scale.toFixed(2) : '?'} (visible ${vv ? `${Math.round(vv.width)}x${Math.round(vv.height)}` : '?'})`, `TV box: ${box('#tv')}`, `YouTube picture: ${box('#yt-host iframe')}`);
+    } catch {}
+    try {
       const s = TV.state;
       const ch = s.channels[s.index];
       if (ch) lines.push(`Channel: ${ch.number} ${ch.name} (${ch.source || ch.type})`);

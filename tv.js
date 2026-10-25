@@ -142,10 +142,37 @@ setInterval(() => {
 }, 1000);
 // Turning the phone: iOS settles on the new size in steps, after the resize event. Lay out again
 // whenever the box really changes size, and a few more times while the rotation finishes.
-const relayout = () => [0, 150, 500, 1000].forEach((ms) => setTimeout(layoutYouTube, ms));
+const relayout = () => [0, 150, 500, 1000].forEach((ms) => setTimeout(() => (unzoom(), layoutYouTube()), ms));
+
+// iOS sometimes zooms a home-screen app in when it turns sideways, and with pinch-zoom off there's
+// no way back: the picture's edges stay cut off. If the page isn't at its normal zoom, re-applying
+// the viewport settings makes iOS reset it.
+const viewport = document.querySelector('meta[name="viewport"]');
+const viewportContent = viewport && viewport.content;
+let unzooming = false;
+let unzoomTries = [];
+function unzoom() {
+  const vv = window.visualViewport;
+  if (!vv || !viewport || unzooming || Math.abs(vv.scale - 1) < 0.01) return;
+  // At most three tries every five seconds, in case iOS won't let go.
+  const now = Date.now();
+  unzoomTries = unzoomTries.filter((t) => now - t < 5000);
+  if (unzoomTries.length >= 3) return;
+  unzoomTries.push(now);
+  unzooming = true;
+  viewport.content = viewportContent.replace('initial-scale=1', 'initial-scale=1.01');
+  setTimeout(() => {
+    viewport.content = viewportContent;
+    window.scrollTo(0, 0);
+    unzooming = false;
+  }, 60);
+}
 window.addEventListener('resize', relayout);
 window.addEventListener('orientationchange', relayout);
-if (window.visualViewport) window.visualViewport.addEventListener('resize', relayout);
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', relayout);
+  window.visualViewport.addEventListener('scroll', unzoom);
+}
 matchMedia('(orientation: portrait)').addEventListener && matchMedia('(orientation: portrait)').addEventListener('change', relayout);
 if (window.ResizeObserver) new ResizeObserver(() => layoutYouTube()).observe($('#yt-host'));
 
