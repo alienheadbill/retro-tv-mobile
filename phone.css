@@ -99,8 +99,13 @@ body.live-on #crt { pointer-events: none; }
 #remote .rows button[data-act='menu'] { grid-column: span 2; }
 body.no-report #remote .rows button[data-act='report'] { display: none; }
 body.no-report #remote .rows button[data-act='menu'] { grid-column: 1 / -1; }
-#remote .keypad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-#remote .keypad .zero { grid-column: 2; }
+/* The number pad is two rows (1-5, 6-0), so the whole remote, 0 included, fits on the screen. */
+#remote .keypad { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+/* The TV's own styles stop the page scrolling (right for a TV screen). Upright on a short phone,
+   the remote may still run past the bottom, so the page can scroll there. */
+@media (orientation: portrait) {
+  html, body { height: auto; min-height: 100%; overflow-y: auto; }
+}
 #remote button {
   background: var(--key); color: var(--key-ink); border: 0; border-radius: 12px; padding: 12px 0;
   font-family: 'VCR', monospace; font-size: 22px; letter-spacing: 0.04em;
@@ -116,7 +121,9 @@ body.no-report #remote .rows button[data-act='menu'] { grid-column: 1 / -1; }
     width: 260px; margin: 0; padding: 12px; border-radius: 20px; background: rgba(20, 22, 26, 0.88);
     opacity: 0; pointer-events: none; transition: opacity 0.25s;
   }
-  #remote .keypad { display: none; }
+  /* Sideways the number pad stays too, smaller (it used to be hidden, so numbers couldn't be typed). */
+  #remote .keypad { gap: 6px; }
+  #remote .keypad button { font-size: 16px; padding: 7px 0; }
   #remote button { font-size: 18px; padding: 10px 0; }
   #remote button.big { font-size: 20px; padding: 12px 0; }
   body.remote-up #remote { opacity: 1; pointer-events: auto; }
@@ -127,6 +134,7 @@ body.no-report #remote .rows button[data-act='menu'] { grid-column: 1 / -1; }
   body.live-on #remote .rows button:not(.big):not(.accent):not([data-act='guide']),
   body.yt-tap #remote .rows button:not(.big):not(.accent):not([data-act='guide']),
   body.yt-ad #remote .rows button:not(.big):not(.accent):not([data-act='guide']) { display: none; }
+  body.live-on #remote .keypad, body.yt-tap #remote .keypad, body.yt-ad #remote .keypad { display: none; }
   body.yt-ad #remote { top: calc(10px + var(--safe-t)); transform: none; }
 }
 
