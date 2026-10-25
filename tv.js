@@ -124,6 +124,13 @@ function layoutYouTube() {
   if (!f || host.hidden) return;
   const cw = host.clientWidth;
   const ch = host.clientHeight;
+  // Nothing to trim: YouTube's player fills the TV box and fits the video itself, the way it
+  // natively fits any screen (no sizes worked out here, so nothing to get wrong on a rotation).
+  if (!ytCrop) {
+    for (const k of ['inset', 'width', 'height', 'left', 'top']) f.style.removeProperty(k);
+    laidOut = `${cw}x${ch}|null`;
+    return;
+  }
   const c = ytCrop || { x: 0, y: 0, w: 1, h: 1 };
   const aspect = (c.w * 16) / (c.h * 9);
   const dw = aspect > cw / ch ? cw : ch * aspect;
