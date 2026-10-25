@@ -128,6 +128,14 @@ const PhoneLib = (() => {
     changed();
   }
 
+  // Many at once (a whole series): saved together, and the TV hears about it once.
+  async function putEntries(list) {
+    for (const e of list) await DB.putEntry(e);
+    const ids = new Set(list.map((e) => e.id));
+    entries = entries.filter((x) => !ids.has(x.id)).concat(list);
+    changed();
+  }
+
   async function removeEntry(id) {
     await DB.deleteEntry(id);
     entries = entries.filter((x) => x.id !== id);
@@ -256,6 +264,7 @@ const PhoneLib = (() => {
     saveChannels,
     saveSettings,
     putEntry,
+    putEntries,
     removeEntry,
     onChange: (fn) => listeners.add(fn),
     home: () => ({ paired: home ? { name: home.name, url: home.url, shared: !!home.shared } : null, here: homeHere, up: homeUp, lineup: homeLineup }),

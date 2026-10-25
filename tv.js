@@ -497,7 +497,10 @@ const actions = {
     if (await askPin('MENU')) Manage.open();
   },
   order: () => tvc.toggleOrder(),
+  // No PIN: anyone watching can say something's wrong.
+  report: () => Report.open(),
 };
+document.body.classList.toggle('no-report', !Report.enabled);
 
 document.querySelectorAll('[data-act]').forEach((b) =>
   b.addEventListener('click', (e) => {

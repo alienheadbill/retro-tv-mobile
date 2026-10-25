@@ -95,7 +95,10 @@ body.live-on #crt { pointer-events: none; }
   display: flex; flex-direction: column; gap: 12px; user-select: none;
 }
 #remote .rows { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-#remote .rows button[data-act='menu'] { grid-column: 1 / -1; }
+/* REPORT and MENU share the last row (MENU alone when reports aren't set up). */
+#remote .rows button[data-act='menu'] { grid-column: span 2; }
+body.no-report #remote .rows button[data-act='report'] { display: none; }
+body.no-report #remote .rows button[data-act='menu'] { grid-column: 1 / -1; }
 #remote .keypad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 #remote .keypad .zero { grid-column: 2; }
 #remote button {
@@ -139,6 +142,8 @@ body.live-on #crt { pointer-events: none; }
 #manage header button { background: none; border: 1px solid transparent; border-radius: 8px; padding: 6px 10px; color: var(--muted); white-space: nowrap; }
 #manage header button.on { color: #fff; background: var(--panel); border-color: var(--line); }
 #manage header .back { color: var(--accent); font-weight: 600; }
+#manage header .report { order: 3; margin-left: auto; color: var(--key-ink); border-color: var(--line); }
+body.no-report #manage header .report { display: none; }
 #manage .panes { flex: 1; min-height: 0; position: relative; }
 #manage .pane { display: none; position: absolute; inset: 0; overflow: auto; -webkit-overflow-scrolling: touch; padding: 14px 14px calc(24px + var(--safe-b)); }
 #manage .pane.on { display: block; }
@@ -230,3 +235,8 @@ body.live-on #crt { pointer-events: none; }
   font: 15px/1.4 -apple-system, 'Segoe UI', system-ui, sans-serif; resize: vertical;
 }
 .report-note { font-size: 12px; color: #7fbf88; }
+
+/* Find: ticking results to add many at once */
+#manage .item .pick { width: 22px; height: 22px; flex: none; accent-color: var(--accent); }
+#manage .picks { position: sticky; top: 0; z-index: 2; background: var(--panel); padding: 6px 0; gap: 8px; }
+#manage .picks:empty, #manage .picks:not(:has(button:not([hidden]))) { display: none; }

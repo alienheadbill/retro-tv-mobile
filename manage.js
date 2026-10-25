@@ -112,6 +112,8 @@ const Manage = (() => {
 
   // ---------- Open / close ----------
 
+  $('#manage-report').addEventListener('click', () => Report.open());
+
   function open() {
     TV.pause();
     root.hidden = false;
@@ -306,6 +308,8 @@ const Manage = (() => {
     return res.json();
   };
   let lastSearch = null;
+  let lastQuery = '';
+  const picked = new Set(); // ticked search results (item ids)
 
   function renderFind() {
     const pane = $('#pane-find');
@@ -319,21 +323,67 @@ const Manage = (() => {
     const results = h('div', { class: 'list' });
     const info = h('p', { class: 'muted' }, 'Search the Internet Archive\'s off-air TV recordings. Videos you add here stream when you watch, so they need internet.');
     const more = h('button', { class: 'btn', hidden: true }, 'More results');
+    const addPicked = h('button', { class: 'btn primary', hidden: true }, '');
+    const selectAll = h('button', { class: 'btn', hidden: true }, 'Select all');
+    const showPicked = () => {
+      addPicked.hidden = !picked.size;
+      addPicked.textContent = `Add ${picked.size} selected`;
+    };
+    selectAll.addEventListener('click', () => {
+      results.querySelectorAll('input[type=checkbox]').forEach((c) => {
+        c.checked = true;
+        picked.add(c.dataset.id);
+      });
+      showPicked();
+    });
+    // Each ticked item is looked at, and the best copy of every video in it is added.
+    addPicked.addEventListener('click', async () => {
+      const ids = [...picked];
+      const sources = [];
+      const have = haveStreams();
+      for (const [i, id] of ids.entries()) {
+        info.textContent = `Looking at ${i + 1} of ${ids.length}...`;
+        try {
+          const it = await ArchiveCore.item(id, getJson, { playableExts: PLAYS_HERE });
+          for (const f of addable(it, have)) sources.push({ it, f });
+        } catch {}
+      }
+      info.textContent = `${sources.length} videos in ${ids.length} items`;
+      if (!sources.length) return toast("None of those play on a phone, or they're already added", true);
+      addMany(sources, { show: lastQuery }, () => {
+        closeSheet();
+        picked.clear();
+        results.querySelectorAll('input[type=checkbox]').forEach((c) => (c.checked = false));
+        showPicked();
+      });
+    });
     const go = async (page = 1) => {
       if (!navigator.onLine) return toast('No internet connection', true);
       info.textContent = 'Searching...';
+      lastQuery = text.value.trim();
+      if (page === 1) {
+        picked.clear();
+        showPicked();
+      }
       try {
         const r = await ArchiveCore.search({ text: text.value, scope: scope.value, category: category.value, page, rows: 30 }, getJson);
         lastSearch = { page, total: r.total };
         if (page === 1) results.replaceChildren();
         info.textContent = r.total ? `${r.total.toLocaleString()} items` : 'Nothing found. Try fewer words.';
         for (const it of r.items) {
+          const tick = h('input', { type: 'checkbox', class: 'pick', 'data-id': it.id, 'aria-label': 'Select', onclick: (e) => e.stopPropagation(), onchange: (e) => {
+            if (e.target.checked) picked.add(it.id);
+            else picked.delete(it.id);
+            showPicked();
+          } });
           results.append(h('div', { class: 'item tap', onclick: () => openItem(it.id) },
+            tick,
             h('img', { src: it.thumb, alt: '', loading: 'lazy' }),
             h('div', { class: 'grow' }, h('div', { class: 't' }, it.title), h('div', { class: 's' }, [it.year || (it.date || '').slice(0, 4), fmtBytes(it.size)].filter(Boolean).join(' · '))),
             it.broadcastHint ? h('span', { class: 'badge gold' }, 'with ads') : null));
         }
         more.hidden = page * r.rows >= r.total;
+        selectAll.hidden = !r.total;
       } catch (e) {
         info.textContent = e.message;
       }
@@ -342,7 +392,7 @@ const Manage = (() => {
     const form = h('form', { class: 'card', onsubmit: (e) => (e.preventDefault(), text.blur(), go(1)) },
       text, h('div', { class: 'grid' }, h('label', null, 'Where', scope), h('label', null, 'Kind', category)),
       h('button', { class: 'btn primary', type: 'submit' }, 'Search'));
-    pane.replaceChildren(form, info, results, h('div', { class: 'row', style: 'justify-content:center;margin-top:10px' }, more));
+    pane.replaceChildren(form, info, h('div', { class: 'row picks' }, selectAll, addPicked), results, h('div', { class: 'row', style: 'justify-content:center;margin-top:10px' }, more));
   }
 
   async function openItem(id) {
@@ -353,10 +403,12 @@ const Manage = (() => {
     } catch (e) {
       return openSheet(h('p', null, e.message), h('button', { class: 'btn', onclick: closeSheet }, 'Close'));
     }
-    const have = new Set(PhoneLib.entries().filter((e) => e.kind === 'stream').map((e) => e.url));
+    const have = haveStreams();
     const videos = it.files.filter((f) => !f.subtitle);
+    const all = addable(it, have);
     openSheet(
       h('div', { class: 'row' }, h('b', { style: 'flex:1' }, it.title), h('button', { class: 'btn', onclick: closeSheet }, 'Close')),
+      all.length > 1 ? h('button', { class: 'btn primary', onclick: () => addMany(all.map((f) => ({ it, f })), { show: lastQuery }, () => openItem(it.id)) }, `Add all ${all.length} videos`) : null,
       h('p', { class: 'muted' }, [it.date, it.collections.slice(0, 2).join(', ')].filter(Boolean).join(' · ')),
       it.description ? h('p', { class: 'muted', style: 'max-height:90px;overflow:auto;white-space:pre-wrap' }, it.description) : null,
       h('div', { class: 'list' },
@@ -379,6 +431,69 @@ const Manage = (() => {
       h('a', { class: 'btn', href: f.url, target: '_blank', rel: 'noopener' }, 'Open in Safari (to save it)'));
   }
 
+  function streamEntry(it, f, duration, opts) {
+    const guess = RetroMeta.guessMeta(`${it.title}/${f.name}`);
+    // DVD rips are named VTS_01_1 and so on; the item's title says what it actually is.
+    const base = f.name.split('/').pop();
+    const dvd = /^VTS_\d\d_(\d)/i.exec(base);
+    const title = dvd ? `${it.title} (part ${dvd[1]})` : guess.title;
+    return {
+      id: uid(), kind: 'stream', url: f.url, name: f.name, size: f.size, added: new Date().toISOString(), duration,
+      title, year: guess.year || it.year || null, airDate: guess.airDate || null, network: guess.network || null,
+      broadcast: opts.broadcast, rating: opts.rating || null, source: it.url, ...opts.dest,
+    };
+  }
+
+  // The best copy of each video in an item that plays here and isn't added yet (an item often
+  // has the original plus the Archive's own MP4 copies of it).
+  function addable(it, have) {
+    const best = new Map();
+    for (const f of it.files) {
+      if (f.subtitle || !f.playable || have.has(f.url)) continue;
+      const cur = best.get(f.group);
+      if (!cur || f.score > cur.score) best.set(f.group, f);
+    }
+    return [...best.values()].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+  }
+
+  const haveStreams = () => new Set(PhoneLib.entries().filter((e) => e.kind === 'stream').map((e) => e.url));
+
+  // Many Archive videos at once: one choice of where they go, then they're added together.
+  function addMany(sources, defaults = {}, back = closeSheet) {
+    const dest = destination({ show: defaults.show || '' });
+    const broadcast = h('input', { type: 'checkbox', checked: sources.filter((s) => s.f.broadcastHint).length > sources.length / 2 });
+    const rating = ratingSelect('');
+    const status = h('p', { class: 'muted' }, '');
+    const go = h('button', { class: 'btn primary' }, `Add all ${sources.length}`);
+    go.addEventListener('click', async () => {
+      go.disabled = true;
+      const opts = { dest: dest.value(), rating: rating.value, broadcast: broadcast.checked };
+      const out = [];
+      let skipped = 0;
+      for (const [i, { it, f }] of sources.entries()) {
+        status.textContent = `Adding ${i + 1} of ${sources.length}...`;
+        const duration = f.length || (await measure(f.url));
+        if (!duration) {
+          skipped++;
+          continue;
+        }
+        out.push(streamEntry(it, f, duration, opts));
+      }
+      await PhoneLib.putEntries(out);
+      toast(`Added ${out.length}${skipped ? ` (${skipped} wouldn't play)` : ''}`);
+      back();
+    });
+    openSheet(
+      h('b', null, `Add ${sources.length} videos`),
+      h('p', { class: 'muted' }, 'They stream from the Internet Archive when they\'re on, so they need internet. Videos you already added are left out.'),
+      dest.el,
+      h('label', null, 'Rating', rating),
+      h('label', { class: 'check' }, broadcast, 'Complete broadcasts (they have their own commercials)'),
+      status,
+      h('div', { class: 'row' }, go, h('button', { class: 'btn', onclick: back }, 'Cancel'))
+    );
+  }
+
   function addStream(it, f) {
     const dest = destination();
     const broadcast = h('input', { type: 'checkbox', checked: f.broadcastHint });
@@ -394,16 +509,7 @@ const Manage = (() => {
           let duration = f.length;
           if (!duration) duration = await measure(f.url);
           if (!duration) return toast("Couldn't read this video's length", true);
-          const guess = RetroMeta.guessMeta(`${it.title}/${f.name}`);
-          // DVD rips are named VTS_01_1 and so on; the item's title says what it actually is.
-          const base = f.name.split('/').pop();
-          const dvd = /^VTS_\d\d_(\d)/i.exec(base);
-          const title = dvd ? `${it.title} (part ${dvd[1]})` : guess.title;
-          await PhoneLib.putEntry({
-            id: uid(), kind: 'stream', url: f.url, name: f.name, size: f.size, added: new Date().toISOString(), duration,
-            title, year: guess.year || it.year || null, airDate: guess.airDate || null, network: guess.network || null,
-            broadcast: broadcast.checked, rating: rating.value || null, source: it.url, ...dest.value(),
-          });
+          await PhoneLib.putEntry(streamEntry(it, f, duration, { dest: dest.value(), rating: rating.value, broadcast: broadcast.checked }));
           toast('Added');
           openItem(it.id);
         } }, 'Add'),
