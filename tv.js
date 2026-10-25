@@ -732,6 +732,13 @@ const TV = {
     return state;
   },
   osd: flashOsd,
+  // For problem reports: what's on right now.
+  nowPlaying() {
+    if (!localNow) return null;
+    const { item } = localNow.loc;
+    const f = item.file;
+    return `${f.show ? f.show + ': ' : ''}${f.title}${item.kind !== 'show' ? ` (${item.kind})` : ''}${f.youtube ? ` [YouTube ${f.youtube}]` : f.stream ? ' [from a PC]' : ''}`;
+  },
 };
 
 async function boot() {

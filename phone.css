@@ -189,7 +189,7 @@ body.live-on #crt { pointer-events: none; }
 #toast.bad { border-color: var(--bad); }
 
 /* ---------- What's new ---------- */
-#whatsnew, #pairing {
+#whatsnew, #pairing, #report {
   position: fixed; inset: 0; z-index: 200; background: rgba(0, 0, 0, 0.7);
   display: flex; align-items: center; justify-content: center; padding: calc(16px + var(--safe-t)) 16px calc(16px + var(--safe-b));
 }
@@ -220,3 +220,10 @@ body.live-on #crt { pointer-events: none; }
 }
 .pair-msg { color: var(--bad); font-size: 14px; min-height: 1em; }
 .wn-later { background: none; border: 0; color: #7fbf88; font-size: 15px; padding: 6px; }
+
+/* Report a problem */
+.report-text, .report-contact {
+  width: 100%; background: #000; color: #e8ffe9; border: 1px solid #39ff4f; border-radius: 10px; padding: 10px;
+  font: 15px/1.4 -apple-system, 'Segoe UI', system-ui, sans-serif; resize: vertical;
+}
+.report-note { font-size: 12px; color: #7fbf88; }
