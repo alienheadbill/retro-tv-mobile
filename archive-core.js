@@ -24,7 +24,8 @@
     episodes: '(episode OR episodes OR season OR "complete series")',
   };
 
-  const BROADCAST_HINT = /\b(full broadcast|broadcasts?|with (ads|commercials)|off[- ]air|vhs recording|recorded (on|from))\b/i;
+  // WOC: collectors' shorthand for "with original commercials".
+  const BROADCAST_HINT = /\b(full broadcast|broadcasts?|with (original )?(ads|commercials)|woc|off[- ]air|vhs recording|recorded (on|from)|tape ?#?\d+)\b/i;
 
   // Formats Chromium plays as-is, by IA format name or extension. The phone passes its own list.
   const PLAYABLE_FORMAT = /^(h\.264( ia| hd)?|mpeg4|512kb mpeg4|ogg video|webm|matroska|quicktime)$/i;
@@ -62,6 +63,68 @@
 
   const first = (v) => (Array.isArray(v) ? v[0] : v);
 
+  // What a search result most likely is, from its title (and description, for broadcasts) and
+  // size. Only a hint for sorting and labels: the item's own files are what to trust.
+  const KINDS = [
+    ['commercials', /\b(commercials?|ads|adverts?|advertisements?)\b/i],
+    ['bumpers', /\b(bump(er)?s|idents?|station ids?|network ids?|promos?)\b/i],
+    ['episode', /\bS\d{1,2} ?E\d{1,3}\b|\b\d{1,2}x\d{2}\b|\bepisodes?\b|\bseasons?\b|\bep\.? ?\d+\b|\b(complete|full) series\b/i],
+    ['clip', /\b(clips?|trailers?|teasers?|previews?|excerpts?|scenes?|intros?|openings?|theme songs?|credits)\b/i],
+  ];
+  function kindOf(title, description, size) {
+    if (BROADCAST_HINT.test(title) || BROADCAST_HINT.test(description)) return 'broadcast';
+    const k = KINDS.find(([, re]) => re.test(title));
+    if (k) return k[0];
+    // Under 20 MB is a few minutes of video at most.
+    return size && size < 20e6 ? 'clip' : 'video';
+  }
+
+  // What each category is after, best first. Videos of unknown kind come next, clips last.
+  const WANT = { broadcast: ['broadcast'], episodes: ['episode', 'broadcast'], commercials: ['commercials'], bumpers: ['bumpers'] };
+
+  // One page of results, put in a useful order: near-identical uploads (same title and year) are
+  // folded into the first, and for a category the kinds it's after come first, clips last, each
+  // group keeping the archive's own order.
+  function arrange(items, category) {
+    const seen = new Map();
+    const kept = [];
+    for (const it of items) {
+      const k = `${String(it.title).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()}|${it.year || ''}`;
+      if (seen.has(k)) {
+        seen.get(k).similar = (seen.get(k).similar || 0) + 1;
+        continue;
+      }
+      seen.set(k, it);
+      kept.push(it);
+    }
+    const want = WANT[category];
+    if (!want) return kept;
+    const score = (it) => (want.includes(it.kind) ? 3 - want.indexOf(it.kind) / want.length : it.kind === 'video' ? 1 : it.kind === 'clip' ? -1 : 0);
+    return kept.map((it, i) => ({ it, i, s: score(it) })).sort((a, b) => b.s - a.s || a.i - b.i).map((x) => x.it);
+  }
+
+  // The lengths of an item's videos (one file per version group, so archive copies of the same
+  // video don't count twice): how many, the longest and the total, in seconds.
+  function lengths(item) {
+    const videos = item.files.filter((f) => f.recommended && f.length);
+    return {
+      videos: videos.length,
+      longest: videos.reduce((m, f) => Math.max(m, f.length), 0) || null,
+      total: videos.reduce((s, f) => s + f.length, 0) || null,
+    };
+  }
+
+  // A result's kind once its real lengths are known: nothing over 5 minutes is a clip, and an
+  // unlabelled video or "clip" of an hour and a half or more is a recording of TV as it aired.
+  // Ads and bumpers keep their kind (compilations run long).
+  function kindByLength(kind, len) {
+    if (!len || !len.longest || kind === 'commercials' || kind === 'bumpers') return kind;
+    if (len.longest < 300) return 'clip';
+    if (len.longest >= 5400 && (kind === 'video' || kind === 'clip')) return 'broadcast';
+    if (kind === 'clip') return 'video';
+    return kind;
+  }
+
   function parseSearch(json) {
     const r = json.response || { numFound: 0, docs: [] };
     return {
@@ -69,6 +132,7 @@
       items: r.docs.map((d) => ({
         source: 'archive',
         id: d.identifier,
+        kind: kindOf(stripHtml(first(d.title)), stripHtml(first(d.description)), d.item_size || null),
         title: stripHtml(first(d.title)) || d.identifier,
         date: first(d.date) || null,
         year: Number(first(d.year)) || null,
@@ -168,7 +232,9 @@
 
   async function search(opts, getJson) {
     const { url, page, rows } = searchUrl(opts);
-    return { ...parseSearch(await getJson(url)), page, rows };
+    const r = parseSearch(await getJson(url));
+    const items = arrange(r.items, opts.category);
+    return { ...r, items, folded: r.items.length - items.length, page, rows };
   }
 
   async function item(id, getJson, parseOpts) {
@@ -188,5 +254,5 @@
     }
   }
 
-  return { SCOPES, CATEGORIES, buildQuery, parseSearch, parseItem, downloadUrl, searchUrl, search, item, allows };
+  return { SCOPES, CATEGORIES, buildQuery, parseSearch, arrange, kindOf, lengths, kindByLength, parseItem, downloadUrl, searchUrl, search, item, allows };
 });

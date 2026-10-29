@@ -40,6 +40,8 @@ body.crt #tv { border-radius: 2.2cqmin; }
 }
 #local { display: none; }
 #local.on { display: block; }
+/* Our own commercials over another site's ad (which keeps running underneath). */
+#local.cover { display: block; z-index: 1; }
 body.crt #screen video, body.crt #screen webview { filter: saturate(1.15) contrast(1.06); }
 
 /* Static between channels */

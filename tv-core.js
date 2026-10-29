@@ -345,6 +345,20 @@ const TVCore = (() => {
       return { file, offset: pick.dur > elapsed + 30 ? Math.max(0, elapsed) : 0 };
     }
 
+    // Our own break to play over another site's ad (YouTube's, a stream's), which keeps running
+    // underneath with its sound off: a bumper, then commercials, all saved videos (not YouTube
+    // ones, which would bring ads of their own). The channel's own, else any channel's.
+    function coverClips(ch) {
+      const saved = (list) => (list || []).filter((f) => !f.youtube && health.usable(keyOf(f)));
+      const from = (kind) => {
+        const own = saved(ch[kind]);
+        const pool = own.length ? own : saved(state.all.flatMap((c) => c[kind] || []));
+        const seen = new Set();
+        return pool.filter((f) => !seen.has(keyOf(f)) && seen.add(keyOf(f))).sort(() => Math.random() - 0.5);
+      };
+      return [...from('bumpers').slice(0, 1).map((f) => ({ ...f, bumper: true })), ...from('commercials')];
+    }
+
     // Nothing left to play in this slot: a standby card until the next one.
     function standbyUntil(cur) {
       localNow = { ch: cur.ch, loc: cur.loc, file: cur.scheduled, sub: null, slotStart: cur.slotStart, slotEnd: cur.slotEnd };
@@ -586,6 +600,7 @@ const TVCore = (() => {
       setProfile,
       start,
       nowPlaying,
+      coverClips,
     };
   }
 

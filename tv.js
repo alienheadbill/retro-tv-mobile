@@ -64,6 +64,9 @@ async function playFile(cur, ctl) {
     me.stallTimer = setTimeout(() => ctl.current() && ctl.stalled(), 20000);
   };
   localVideo.onended = () => ctl.finished();
+  // Channels don't pause: if the lock screen or headphones pause it, carry on, popped out too.
+  // (Leaving the app without popping it out pauses it; coming back catches up.)
+  localVideo.onpause = () => !localVideo.ended && (document.visibilityState === 'visible' || inPip()) && ctl.current() && play();
   localVideo.onerror = () => ctl.failed((localVideo.error && ['', 'stopped', 'network error', "couldn't decode", 'missing or unsupported'][localVideo.error.code]) || 'error', !!localVideo.error && localVideo.error.code === 3);
   localVideo.muted = tvc.state.muted;
   localVideo.src = url;
@@ -74,11 +77,14 @@ function stopItem() {
   stopYouTube();
   if (filePlay) clearTimeout(filePlay.stallTimer);
   filePlay = null;
-  localVideo.onloadedmetadata = localVideo.onended = localVideo.onerror = localVideo.onplaying = localVideo.onwaiting = null;
+  localVideo.onloadedmetadata = localVideo.onended = localVideo.onerror = localVideo.onplaying = localVideo.onwaiting = localVideo.onpause = null;
   localVideo.pause();
-  localVideo.removeAttribute('src');
-  localVideo.load();
-  localVideo.classList.remove('on');
+  // Popped out: keep the window for whatever plays next (the next video just replaces this one).
+  if (!inPip()) {
+    localVideo.removeAttribute('src');
+    localVideo.load();
+    localVideo.classList.remove('on');
+  }
   if (objectUrl) URL.revokeObjectURL(objectUrl);
   objectUrl = null;
 }
@@ -94,6 +100,38 @@ $('#tap-play').addEventListener('click', () => {
   $('#tap-play').hidden = true;
   localVideo.play().catch(() => {});
 });
+// The lock screen's pause button does nothing.
+try {
+  navigator.mediaSession.setActionHandler('pause', () => {});
+} catch {}
+
+// A safety net for pauses that slip past the pause event: every few seconds, a video that should
+// be playing and isn't gets started again.
+setInterval(() => {
+  if (filePlay && localVideo.paused && !localVideo.ended && localVideo.readyState > 2 && $('#tap-play').hidden && (document.visibilityState === 'visible' || inPip())) play();
+}, 3000);
+
+// ---------- Picture-in-picture ----------
+
+// iOS only pops a video out after a tap (never by itself on leaving the app), and only the video
+// element: YouTube and live channels play in other sites' players, which can't be popped out.
+const pipSupported = !!(document.pictureInPictureEnabled || (localVideo.webkitSupportsPresentationMode && localVideo.webkitSupportsPresentationMode('picture-in-picture')));
+document.body.classList.toggle('has-pip', pipSupported);
+const inPip = () => document.pictureInPictureElement === localVideo || localVideo.webkitPresentationMode === 'picture-in-picture';
+
+async function setPip(on) {
+  if (document.pictureInPictureEnabled) {
+    if (on) await localVideo.requestPictureInPicture();
+    else if (document.pictureInPictureElement) await document.exitPictureInPicture();
+  } else localVideo.webkitSetPresentationMode(on ? 'picture-in-picture' : 'inline');
+}
+
+function togglePip() {
+  if (inPip()) return setPip(false).catch(() => {});
+  if (!filePlay || localVideo.paused) return tvc.flashOsd('NO PIP ON THIS CHANNEL', 'ONLY FOR VIDEOS FROM THIS PHONE OR YOUR PC', 3000);
+  setPip(true).catch(() => tvc.flashOsd('NO PIP', "THE PHONE WON'T ALLOW IT HERE", 3000));
+}
+const leavePip = () => inPip() && setPip(false).catch(() => {});
 
 // ---------- YouTube ----------
 
@@ -184,12 +222,14 @@ matchMedia('(orientation: portrait)').addEventListener && matchMedia('(orientati
 if (window.ResizeObserver) new ResizeObserver(() => layoutYouTube()).observe($('#yt-host'));
 
 // YouTube's own ads. The embedded player doesn't say when one is on, but the show's clock stops
-// (or its length changes to the ad's) while the player says it's playing. During one the whole
-// frame is shown, not the show's crop (which would cut off the ad's Skip button), and taps go to
-// the player so Skip can be tapped.
+// (or its length changes to the ad's) while the player says it's playing. During one our own
+// saved break plays over it, its sound off underneath. With none of ours to play, the whole frame
+// is shown, not the show's crop (which would cut off the ad's Skip button), and taps go to the
+// player so Skip can be tapped.
 let ytAdWatch = 0;
-function watchForAds(file, isCurrent) {
+function watchForAds(file, isCurrent, ch) {
   clearInterval(ytAdWatch);
+  endCover();
   document.body.classList.remove('yt-ad');
   const crop = file.crop || null;
   let last = -1;
@@ -200,6 +240,8 @@ function watchForAds(file, isCurrent) {
     ad = on;
     ytCrop = on ? null : crop;
     layoutYouTube();
+    if (on && coverAd(ch)) return;
+    if (!on) endCover();
     document.body.classList.toggle('yt-ad', on);
     if (on) tvc.flashOsd('COMMERCIAL', 'TAP SKIP ON THE PICTURE WHEN IT SHOWS UP', 4000);
   };
@@ -222,15 +264,19 @@ async function ytPlay(file, offset, on) {
   host.hidden = false;
   ytCrop = file.crop || null;
   layoutYouTube();
-  watchForAds(file, on.isCurrent);
+  watchForAds(file, on.isCurrent, on.ch);
+  let played = false;
   ytHandlers = {
     state: (e) => {
       if (!on.isCurrent()) return;
       if (e.data === YT.PlayerState.ENDED) on.end();
       if (e.data === YT.PlayerState.PLAYING) {
+        played = true;
         captionsOff();
         on.play();
       }
+      // Channels don't pause: once it's going, a tap (during an ad) or the lock screen can't stop it.
+      if (e.data === YT.PlayerState.PAUSED && played && document.visibilityState === 'visible') ytPlayer.playVideo();
       // Until it plays, taps go to YouTube's own play button.
       document.body.classList.toggle('yt-tap', e.data !== YT.PlayerState.PLAYING && e.data !== YT.PlayerState.BUFFERING);
     },
@@ -270,9 +316,11 @@ async function ytPlay(file, offset, on) {
 
 // A scheduled YouTube video.
 function playYouTube(cur, ctl) {
+  leavePip();
   localVideo.pause();
   localVideo.classList.remove('on');
   ytPlay(cur.file, cur.offset, {
+    ch: cur.ch,
     isCurrent: ctl.current,
     play: ctl.started,
     end: ctl.finished,
@@ -290,12 +338,68 @@ function captionsOff() {
 }
 
 function stopYouTube() {
+  endCover();
   ytHandlers = {};
   clearInterval(ytAdWatch);
   document.body.classList.remove('yt-tap', 'yt-ad');
   if (ytPlayer && ytPlayer.stopVideo) ytPlayer.stopVideo();
   const host = $('#yt-host');
   if (host) host.hidden = true;
+}
+
+// ---------- Our commercials over YouTube's ads ----------
+
+// Plays in the video element, free while YouTube is on (and already allowed to play with sound).
+let cover = null; // { clips, i, errors }
+
+// Starts our break over the ad; false when there's nothing of ours to play.
+function coverAd(ch) {
+  if (cover) return true;
+  const clips = ch ? tvc.coverClips(ch) : [];
+  if (!clips.length) return false;
+  cover = { clips, i: 0, errors: 0 };
+  localVideo.onended = coverNext;
+  localVideo.onerror = coverFailed;
+  localVideo.onpause = () => !localVideo.ended && document.visibilityState === 'visible' && play();
+  localVideo.muted = tvc.state.muted;
+  localVideo.classList.add('cover');
+  applyVolume();
+  coverNext();
+  return true;
+}
+
+async function coverNext() {
+  const me = cover;
+  if (!me) return;
+  const f = me.clips[me.i++ % me.clips.length];
+  let url;
+  try {
+    url = await resolveUrl(f);
+  } catch {
+    return coverFailed();
+  }
+  if (cover !== me) return;
+  localVideo.src = url;
+  play();
+}
+
+// One of ours won't play: the next. None will: YouTube's ad is shown whole, with its Skip button.
+function coverFailed() {
+  if (!cover) return;
+  if (++cover.errors < cover.clips.length) return coverNext();
+  endCover();
+  document.body.classList.add('yt-ad');
+}
+
+function endCover() {
+  if (!cover) return;
+  cover = null;
+  localVideo.onended = localVideo.onerror = localVideo.onpause = null;
+  localVideo.pause();
+  localVideo.removeAttribute('src');
+  localVideo.load();
+  localVideo.classList.remove('cover');
+  applyVolume();
 }
 
 // ---------- Live channels: the sites' own embeddable players ----------
@@ -315,6 +419,7 @@ function liveUrl(ch) {
 }
 
 function playLive(ch, t) {
+  leavePip();
   if (!navigator.onLine) return tvc.standby('NO SIGNAL', 'No internet. The channels on your phone still work.');
   const st = tvc.state.status.get(ch.number);
   if (st && !st.online) return tvc.offAir(ch, st);
@@ -325,6 +430,7 @@ function playLive(ch, t) {
   if (ch.type === 'youtube-live' && ch.videoId && !ch.fallback) {
     live = { youtube: true, ch };
     return ytPlay({ youtube: ch.videoId }, null, {
+      ch,
       isCurrent,
       play: () => tvc.health.ok('live:' + ch.number, { kind: ch.type }),
       end: () => isCurrent() && tvc.tune(tvc.state.index, { quiet: true }),
@@ -375,7 +481,8 @@ async function twitchStatus(ch) {
 function applyVolume() {
   const muted = tvc.state.muted;
   localVideo.muted = muted;
-  if (ytPlayer && ytPlayer.mute) muted ? ytPlayer.mute() : ytPlayer.unMute();
+  // YouTube's ad under our own commercials is silent.
+  if (ytPlayer && ytPlayer.mute) muted || cover ? ytPlayer.mute() : ytPlayer.unMute();
 }
 
 // ---------- The shared TV ----------
@@ -497,6 +604,7 @@ const actions = {
     if (await askPin('MENU')) Manage.open();
   },
   order: () => tvc.toggleOrder(),
+  pip: () => togglePip(),
   // No PIN: anyone watching can say something's wrong.
   report: () => Report.open(),
 };
@@ -576,13 +684,22 @@ async function keepAwake() {
     if ('wakeLock' in navigator && document.visibilityState === 'visible') wakeLock = await navigator.wakeLock.request('screen');
   } catch {}
 }
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && tvc.state.on) {
-    keepAwake();
-    // Coming back to the app: catch up with the schedule, like a real TV would have.
-    if (!Manage.isOpen()) tvc.tune(tvc.state.index, { quiet: true });
-  }
-});
+// Coming back to the app: a popped-out picture goes back on the TV, and if what was on stopped
+// while away (iOS pauses it unless it's popped out), catch up with the schedule, like a real TV
+// would have. iOS doesn't always say the app is back the same way, so any of the signs will do.
+let backAt = 0;
+function comeBack() {
+  if (document.visibilityState !== 'visible' || !tvc.state.on) return;
+  keepAwake();
+  leavePip();
+  if (Manage.isOpen() || Date.now() - backAt < 2000) return;
+  backAt = Date.now();
+  if (filePlay && !localVideo.paused && !localVideo.ended) return; // still playing: nothing missed
+  tvc.tune(tvc.state.index, { quiet: true });
+}
+document.addEventListener('visibilitychange', comeBack);
+window.addEventListener('pageshow', comeBack);
+window.addEventListener('focus', comeBack);
 
 // ---------- Startup ----------
 

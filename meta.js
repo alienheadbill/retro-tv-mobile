@@ -21,8 +21,9 @@
     [/\bmtv\b/i, 'MTV'],
   ];
 
-  // Words in a title that usually mean "this is a recording of TV as it aired".
-  const BROADCAST_HINT = /\b(full broadcast|broadcast|with (ads|commercials)|off[- ]air|vhs recording|tape \d+|marathon|block)\b/i;
+  // Words in a title that usually mean "this is a recording of TV as it aired" (WOC: collectors'
+  // shorthand for "with original commercials").
+  const BROADCAST_HINT = /\b(full broadcast|broadcast|with (original )?(ads|commercials)|woc|off[- ]air|vhs recording|tape ?#?\d+|marathon|block)\b/i;
 
   // What a file's folder says about it: its role on air, and its show if it sits in a show folder.
   function placement(parts) {
