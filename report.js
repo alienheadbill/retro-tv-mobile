@@ -28,7 +28,19 @@ const Report = (() => {
         const r = el.getBoundingClientRect();
         return `${Math.round(r.left)},${Math.round(r.top)} ${Math.round(r.width)}x${Math.round(r.height)}`;
       };
-      lines.push(`Zoom: ${vv ? vv.scale.toFixed(2) : '?'} (visible ${vv ? `${Math.round(vv.width)}x${Math.round(vv.height)}` : '?'})`, `TV box: ${box('#tv')}`, `YouTube picture: ${box('#yt-host iframe')}`);
+      // The notch / Dynamic Island / home bar areas iOS reports (top right bottom left).
+      const probe = document.createElement('div');
+      probe.style.cssText = 'position:fixed;visibility:hidden;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)';
+      document.body.append(probe);
+      const cs = getComputedStyle(probe);
+      const safe = [cs.paddingTop, cs.paddingRight, cs.paddingBottom, cs.paddingLeft].map((v) => Math.round(parseFloat(v) || 0)).join(' ');
+      probe.remove();
+      lines.push(
+        `Zoom: ${vv ? vv.scale.toFixed(2) : '?'} (visible ${vv ? `${Math.round(vv.width)}x${Math.round(vv.height)} at ${Math.round(vv.offsetLeft)},${Math.round(vv.offsetTop)}` : '?'}; scrolled ${Math.round(scrollX)},${Math.round(scrollY)})`,
+        `Safe area (top right bottom left): ${safe}`,
+        `Look: ${document.body.classList.contains('tv-frame') ? 'old TV' : document.body.classList.contains('crt') ? 'scanlines' : 'plain'}`,
+        `TV set: ${box('#set')}`, `TV screen: ${box('#tv')}`, `YouTube holder: ${box('#yt-host')}`, `YouTube picture: ${box('#yt-host iframe')}`
+      );
     } catch {}
     try {
       const s = TV.state;

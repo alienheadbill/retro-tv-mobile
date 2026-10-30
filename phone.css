@@ -27,15 +27,39 @@ html, body { width: 100%; overflow-x: hidden; }
 body { background: #000; overscroll-behavior: none; touch-action: manipulation; }
 button { font: inherit; color: inherit; cursor: pointer; }
 
-/* ---------- The TV box ---------- */
-/* Upright, the box takes the shape of what's on (tv.js sets --tv-aspect, 4:3 to 16:9), so a
-   widescreen picture fills it rather than sitting between black bars. */
-#tv {
-  position: relative; inset: auto; width: 100%; aspect-ratio: var(--tv-aspect, 4 / 3); max-height: 62vh; max-height: 62dvh;
-  margin: var(--safe-t) auto 0; container-type: size;
+/* ---------- The TV set ---------- */
+/* #set is the whole TV, #tv its screen. Without the frame the screen is the whole set: upright it
+   takes the shape of what's on (tv.js sets --tv-aspect, 4:3 to 16:9), sideways the whole screen. */
+#set {
+  position: relative; width: 100%; aspect-ratio: var(--tv-aspect, 4 / 3); max-height: 62vh; max-height: 62dvh;
+  margin: var(--safe-t) auto 0;
+}
+#tv { position: absolute; inset: 0; container-type: size; }
+@media (orientation: landscape) {
+  #set { position: fixed; inset: 0; width: auto; max-height: none; aspect-ratio: auto; margin: 0; }
+}
+
+/* The old-TV frame (TV LOOK): a cabinet with a 4:3 screen set into it, and every picture fits
+   inside that screen. The screen never reaches the phone's edges, notch or Dynamic Island. */
+body.tv-frame { --bezel: 14px; }
+body.tv-frame #set {
+  aspect-ratio: auto; height: calc((100vw - 2 * var(--bezel)) * 0.75 + 2 * var(--bezel));
+  background: radial-gradient(120% 140% at 50% 0%, #3a3631 0%, #24211d 55%, #161412 100%);
+  border-radius: 0 0 18px 18px; box-shadow: inset 0 -2px 0 #0d0c0a, inset 0 1px 0 #4a453e;
+}
+body.tv-frame #tv {
+  inset: var(--bezel); border-radius: 14px; overflow: hidden;
+  box-shadow: 0 0 0 2px #050505, 0 0 0 5px #2c2925, 0 0 0 6px #0b0a09, 0 0 14px 7px rgba(0, 0, 0, 0.55);
 }
 @media (orientation: landscape) {
-  #tv { position: fixed; inset: 0; width: auto; max-height: none; aspect-ratio: auto; margin: 0; }
+  body.tv-frame { --bezel: 16px; }
+  body.tv-frame #set { height: auto; border-radius: 0; }
+  /* As tall as the screen allows, 4:3, in the middle; the cabinet fills the sides. */
+  body.tv-frame #tv {
+    top: var(--bezel); bottom: var(--bezel); right: auto;
+    width: calc((100dvh - 2 * var(--bezel)) * 4 / 3);
+    left: calc(50% - (100dvh - 2 * var(--bezel)) * 2 / 3);
+  }
 }
 #screen iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #000; }
 #yt-host { position: absolute; inset: 0; background: #000; overflow: hidden; }
@@ -44,7 +68,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   /* Sideways, other sites' players (YouTube's above all) push their picture over by the notch's
      width when their frame runs under the notch or Dynamic Island, so their frames stay inside
      the safe area. A picture as tall as the screen is narrower than that anyway. */
-  #yt-host, #screen > iframe { left: var(--safe-l); right: var(--safe-r); width: auto; }
+  body:not(.tv-frame) #yt-host, body:not(.tv-frame) #screen > iframe { left: var(--safe-l); right: var(--safe-r); width: auto; }
 }
 /* Until a YouTube video starts, taps go to YouTube's own play button (and during ads, to Skip). */
 body.yt-tap #crt, body.yt-ad #crt { pointer-events: none; }

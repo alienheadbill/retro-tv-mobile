@@ -16,39 +16,42 @@
   <link rel="stylesheet" href="phone.css">
 </head>
 <body class="crt">
-  <div id="tv">
-    <div id="screen">
-      <video id="local" playsinline webkit-playsinline preload="auto"></video>
-      <div id="yt-host" hidden><div id="yt-player"></div></div>
-      <div id="standby" hidden>
-        <div class="bars"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
-        <div class="card"><div class="big"></div><div class="small"></div></div>
+  <!-- The TV set: with the old-TV frame on, the cabinet around the screen (#tv). -->
+  <div id="set">
+    <div id="tv">
+      <div id="screen">
+        <video id="local" playsinline webkit-playsinline preload="auto"></video>
+        <div id="yt-host" hidden><div id="yt-player"></div></div>
+        <div id="standby" hidden>
+          <div class="bars"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+          <div class="card"><div class="big"></div><div class="small"></div></div>
+        </div>
+        <canvas id="static" width="200" height="150"></canvas>
       </div>
-      <canvas id="static" width="200" height="150"></canvas>
-    </div>
 
-    <div id="guide" hidden>
-      <div class="guide-top">
-        <div class="guide-info">
-          <div class="guide-logo">TV<span>GUIDE</span></div>
-          <div class="guide-clock"></div>
-          <div class="guide-pick"></div>
+      <div id="guide" hidden>
+        <div class="guide-top">
+          <div class="guide-info">
+            <div class="guide-logo">TV<span>GUIDE</span></div>
+            <div class="guide-clock"></div>
+            <div class="guide-pick"></div>
+          </div>
+        </div>
+        <div class="guide-grid">
+          <div class="guide-head"></div>
+          <div class="guide-rows"></div>
         </div>
       </div>
-      <div class="guide-grid">
-        <div class="guide-head"></div>
-        <div class="guide-rows"></div>
-      </div>
-    </div>
 
-    <div id="banner"></div>
-    <div id="osd"><div class="ch"></div><div class="name"></div></div>
-    <div id="vol"></div>
-    <div id="menu" hidden></div>
-    <button id="tap-play" hidden>&#9654; TAP TO PLAY</button>
-    <div id="crt"></div>
-    <div id="power"><div class="line"></div></div>
-    <button id="power-on"><span class="knob"></span><span>TAP TO TURN ON</span></button>
+      <div id="banner"></div>
+      <div id="osd"><div class="ch"></div><div class="name"></div></div>
+      <div id="vol"></div>
+      <div id="menu" hidden></div>
+      <button id="tap-play" hidden>&#9654; TAP TO PLAY</button>
+      <div id="crt"></div>
+      <div id="power"><div class="line"></div></div>
+      <button id="power-on"><span class="knob"></span><span>TAP TO TURN ON</span></button>
+    </div>
   </div>
 
   <div id="remote">

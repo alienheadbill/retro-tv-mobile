@@ -90,11 +90,21 @@ function stopItem() {
   objectUrl = null;
 }
 
+// TV LOOK cycles through these: the old-TV frame with scanlines, scanlines on the whole screen, plain.
+const LOOKS = ['frame', 'crt', 'plain'];
+const LOOK_NAMES = { frame: 'OLD TV', crt: 'SCANLINES', plain: 'PLAIN' };
+const currentLook = () => (document.body.classList.contains('tv-frame') ? 'frame' : document.body.classList.contains('crt') ? 'crt' : 'plain');
+function setLook(look) {
+  if (!LOOKS.includes(look)) look = 'frame';
+  document.body.classList.toggle('tv-frame', look === 'frame');
+  document.body.classList.toggle('crt', look !== 'plain');
+}
+
 // Upright, the TV box takes the shape of the picture, from 4:3 to 16:9 (sideways it's the whole
 // screen), so widescreen shows fill it instead of leaving a black band under them.
 function fitBox(aspect) {
   const a = Math.min(16 / 9, Math.max(4 / 3, aspect || 16 / 9));
-  $('#tv').style.setProperty('--tv-aspect', a.toFixed(4));
+  $('#set').style.setProperty('--tv-aspect', a.toFixed(4));
 }
 
 // iOS only lets a video play with sound after a tap. If it refuses, ask for one.
@@ -607,9 +617,10 @@ const actions = {
   mute: () => tvc.toggleMute(),
   profile: () => openProfileMenu(),
   crt: () => {
-    const on = !document.body.classList.contains('crt');
-    document.body.classList.toggle('crt', on);
-    store.set('crt', on);
+    const next = LOOKS[(LOOKS.indexOf(currentLook()) + 1) % LOOKS.length];
+    setLook(next);
+    store.set('look', next);
+    tvc.flashOsd(LOOK_NAMES[next], '', 1500);
   },
   menu: async () => {
     if (await askPin('MENU')) Manage.open();
@@ -746,7 +757,9 @@ const TV = {
 async function boot() {
   await PhoneLib.load();
   await reload();
-  document.body.classList.toggle('crt', store.get('crt', tvc.state.settings.crt !== false));
+  // Before looks, TV LOOK only switched the scanlines (saved as 'crt'): that choice carries over.
+  const oldCrt = store.get('crt', null);
+  setLook(store.get('look', oldCrt === false || tvc.state.settings.crt === false ? 'plain' : 'frame'));
   tvc.start();
   PhoneLib.onChange(() => (Manage.isOpen() ? reload().then(() => tvc.applyProfile()) : TV.refresh()));
   Manage.offerPairing();
