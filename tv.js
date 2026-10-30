@@ -51,6 +51,7 @@ async function playFile(cur, ctl) {
   const me = filePlay;
   localVideo.onloadedmetadata = () => {
     if (!ctl.current()) return;
+    if (localVideo.videoWidth && localVideo.videoHeight) fitBox(localVideo.videoWidth / localVideo.videoHeight);
     localVideo.currentTime = Math.min(cur.offset, Math.max(0, (localVideo.duration || Infinity) - 1));
     play();
   };
@@ -87,6 +88,13 @@ function stopItem() {
   }
   if (objectUrl) URL.revokeObjectURL(objectUrl);
   objectUrl = null;
+}
+
+// Upright, the TV box takes the shape of the picture, from 4:3 to 16:9 (sideways it's the whole
+// screen), so widescreen shows fill it instead of leaving a black band under them.
+function fitBox(aspect) {
+  const a = Math.min(16 / 9, Math.max(4 / 3, aspect || 16 / 9));
+  $('#tv').style.setProperty('--tv-aspect', a.toFixed(4));
 }
 
 // iOS only lets a video play with sound after a tap. If it refuses, ask for one.
@@ -263,6 +271,8 @@ async function ytPlay(file, offset, on) {
   const host = $('#yt-host');
   host.hidden = false;
   ytCrop = file.crop || null;
+  // The picture's shape: its trimmed box (measured on the PC), else YouTube's 16:9 frame.
+  fitBox(ytCrop ? (ytCrop.w * 16) / (ytCrop.h * 9) : 16 / 9);
   layoutYouTube();
   watchForAds(file, on.isCurrent, on.ch);
   let played = false;
@@ -441,6 +451,7 @@ function playLive(ch, t) {
       },
     });
   }
+  fitBox(16 / 9);
   const frame = document.createElement('iframe');
   frame.src = liveUrl(ch);
   frame.allow = 'autoplay; fullscreen; encrypted-media; picture-in-picture';

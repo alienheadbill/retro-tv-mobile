@@ -28,8 +28,10 @@ body { background: #000; overscroll-behavior: none; touch-action: manipulation; 
 button { font: inherit; color: inherit; cursor: pointer; }
 
 /* ---------- The TV box ---------- */
+/* Upright, the box takes the shape of what's on (tv.js sets --tv-aspect, 4:3 to 16:9), so a
+   widescreen picture fills it rather than sitting between black bars. */
 #tv {
-  position: relative; inset: auto; width: 100%; aspect-ratio: 4 / 3; max-height: 62vh; max-height: 62dvh;
+  position: relative; inset: auto; width: 100%; aspect-ratio: var(--tv-aspect, 4 / 3); max-height: 62vh; max-height: 62dvh;
   margin: var(--safe-t) auto 0; container-type: size;
 }
 @media (orientation: landscape) {
@@ -38,6 +40,12 @@ button { font: inherit; color: inherit; cursor: pointer; }
 #screen iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #000; }
 #yt-host { position: absolute; inset: 0; background: #000; overflow: hidden; }
 #yt-host iframe { position: absolute; inset: 0; width: 100%; height: 100%; }
+@media (orientation: landscape) {
+  /* Sideways, other sites' players (YouTube's above all) push their picture over by the notch's
+     width when their frame runs under the notch or Dynamic Island, so their frames stay inside
+     the safe area. A picture as tall as the screen is narrower than that anyway. */
+  #yt-host, #screen > iframe { left: var(--safe-l); right: var(--safe-r); width: auto; }
+}
 /* Until a YouTube video starts, taps go to YouTube's own play button (and during ads, to Skip). */
 body.yt-tap #crt, body.yt-ad #crt { pointer-events: none; }
 
