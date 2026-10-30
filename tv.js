@@ -65,9 +65,9 @@ async function playFile(cur, ctl) {
     me.stallTimer = setTimeout(() => ctl.current() && ctl.stalled(), 20000);
   };
   localVideo.onended = () => ctl.finished();
-  // Channels don't pause: if the lock screen or headphones pause it, carry on, popped out too.
-  // (Leaving the app without popping it out pauses it; coming back catches up.)
-  localVideo.onpause = () => !localVideo.ended && (document.visibilityState === 'visible' || inPip()) && ctl.current() && play();
+  // Channels don't pause: if the lock screen or headphones pause it, carry on, popped out or on
+  // the TV too. (Leaving the app otherwise pauses it; coming back catches up.)
+  localVideo.onpause = () => !localVideo.ended && playsAway() && ctl.current() && play();
   localVideo.onerror = () => ctl.failed((localVideo.error && ['', 'stopped', 'network error', "couldn't decode", 'missing or unsupported'][localVideo.error.code]) || 'error', !!localVideo.error && localVideo.error.code === 3);
   localVideo.muted = tvc.state.muted;
   localVideo.src = url;
@@ -80,8 +80,9 @@ function stopItem() {
   filePlay = null;
   localVideo.onloadedmetadata = localVideo.onended = localVideo.onerror = localVideo.onplaying = localVideo.onwaiting = localVideo.onpause = null;
   localVideo.pause();
-  // Popped out: keep the window for whatever plays next (the next video just replaces this one).
-  if (!inPip()) {
+  // Popped out or on the TV: keep it there for whatever plays next (the next video just replaces
+  // this one).
+  if (!inPip() && !casting()) {
     localVideo.removeAttribute('src');
     localVideo.load();
     localVideo.classList.remove('on');
@@ -126,8 +127,10 @@ try {
 // A safety net for pauses that slip past the pause event: every few seconds, a video that should
 // be playing and isn't gets started again.
 setInterval(() => {
-  if (filePlay && localVideo.paused && !localVideo.ended && localVideo.readyState > 2 && $('#tap-play').hidden && (document.visibilityState === 'visible' || inPip())) play();
+  if (filePlay && localVideo.paused && !localVideo.ended && localVideo.readyState > 2 && $('#tap-play').hidden && playsAway()) play();
 }, 3000);
+// The video keeps going while it's on screen, popped out, or on the TV (with the phone locked, say).
+const playsAway = () => document.visibilityState === 'visible' || inPip() || casting();
 
 // ---------- Picture-in-picture ----------
 
@@ -150,6 +153,45 @@ function togglePip() {
   setPip(true).catch(() => tvc.flashOsd('NO PIP', "THE PHONE WON'T ALLOW IT HERE", 3000));
 }
 const leavePip = () => inPip() && setPip(false).catch(() => {});
+
+// ---------- Cast to a TV ----------
+
+// AirPlay on iPhone and iPad; Chromecast through Chrome's Remote Playback on Android. Only the
+// video element can go: YouTube and live channels play in other sites' players. The TV fetches the
+// video itself, so it plays ones it can reach (from your PC or the Internet Archive); videos stored
+// on the phone itself may not cast.
+const castApi = localVideo.webkitShowPlaybackTargetPicker ? 'airplay' : localVideo.remote && localVideo.remote.prompt ? 'remote' : null;
+document.body.classList.toggle('has-cast', !!castApi);
+let castTargets = null; // AirPlay: whether a TV is on the network (null until iOS says)
+const casting = () => !!(localVideo.webkitCurrentPlaybackTargetIsWireless || (castApi === 'remote' && localVideo.remote.state === 'connected'));
+
+function castChanged() {
+  const on = casting();
+  document.body.classList.toggle('casting', on);
+  tvc.flashOsd(on ? 'ON YOUR TV' : 'BACK ON THE PHONE', on ? 'THE PHONE IS THE REMOTE NOW' : '', 3000);
+}
+if (castApi === 'airplay') {
+  localVideo.addEventListener('webkitplaybacktargetavailabilitychanged', (e) => (castTargets = e.availability === 'available'));
+  localVideo.addEventListener('webkitcurrentplaybacktargetiswirelesschanged', castChanged);
+} else if (castApi === 'remote') {
+  localVideo.remote.addEventListener('connect', castChanged);
+  localVideo.remote.addEventListener('disconnect', castChanged);
+}
+
+function cast() {
+  if (!castApi) return;
+  // On the TV already: the same menu sends it back to the phone.
+  if (!casting() && (!filePlay || !localVideo.currentSrc)) return tvc.flashOsd('NO CAST ON THIS CHANNEL', 'ONLY FOR VIDEOS FROM THIS PHONE OR YOUR PC', 3000);
+  if (castApi === 'airplay') {
+    if (castTargets === false && !casting()) return tvc.flashOsd('NO TV FOUND', 'IS IT ON THE SAME WI-FI?', 3000);
+    localVideo.webkitShowPlaybackTargetPicker();
+  } else {
+    localVideo.remote.prompt().catch((e) => tvc.flashOsd('NO CAST', e && e.name === 'NotFoundError' ? 'NO TV FOUND' : "THIS VIDEO CAN'T BE CAST", 3000));
+  }
+}
+
+// YouTube and live channels stay on the phone; say so when one comes on while casting.
+const castNote = () => casting() && tvc.flashOsd('THIS ONE PLAYS ON THE PHONE', "YOUTUBE AND LIVE CHANNELS CAN'T BE CAST", 4000);
 
 // ---------- YouTube ----------
 
@@ -336,6 +378,7 @@ async function ytPlay(file, offset, on) {
 
 // A scheduled YouTube video.
 function playYouTube(cur, ctl) {
+  castNote();
   leavePip();
   localVideo.pause();
   localVideo.classList.remove('on');
@@ -439,6 +482,7 @@ function liveUrl(ch) {
 }
 
 function playLive(ch, t) {
+  castNote();
   leavePip();
   if (!navigator.onLine) return tvc.standby('NO SIGNAL', 'No internet. The channels on your phone still work.');
   const st = tvc.state.status.get(ch.number);
@@ -627,6 +671,7 @@ const actions = {
   },
   order: () => tvc.toggleOrder(),
   pip: () => togglePip(),
+  cast: () => cast(),
   // No PIN: anyone watching can say something's wrong.
   report: () => Report.open(),
 };

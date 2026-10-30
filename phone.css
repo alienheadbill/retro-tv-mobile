@@ -127,15 +127,13 @@ body.live-on #crt { pointer-events: none; }
   display: flex; flex-direction: column; gap: 12px; user-select: none;
 }
 #remote .rows { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-/* REPORT and MENU share the last row (MENU alone when reports aren't set up). */
-#remote .rows button[data-act='menu'] { grid-column: span 2; }
+/* PIP, CAST and REPORT share a row (each only when the phone can do it); MENU has the last row. */
+#remote .rows button[data-act='menu'] { grid-column: 1 / -1; }
 body.no-report #remote .rows button[data-act='report'] { display: none; }
-body.no-report #remote .rows button[data-act='menu'] { grid-column: 1 / -1; }
-/* PIP joins them when the phone can pop a video out. */
-#remote .rows button[data-act='pip'] { display: none; }
-body.has-pip #remote .rows button[data-act='pip'] { display: block; }
-body.has-pip #remote .rows button[data-act='menu'] { grid-column: span 1; }
-body.has-pip.no-report #remote .rows button[data-act='menu'] { grid-column: span 2; }
+#remote .rows button[data-act='pip'], #remote .rows button[data-act='cast'] { display: none; }
+body.has-pip #remote .rows button[data-act='pip'], body.has-cast #remote .rows button[data-act='cast'] { display: block; }
+/* Lit while the picture is on the TV. */
+body.casting #remote .rows button[data-act='cast'] { background: var(--accent); color: var(--accent-ink); }
 /* The number pad is two rows (1-5, 6-0), so the whole remote, 0 included, fits on the screen. */
 #remote .keypad { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
 /* The TV's own styles stop the page scrolling (right for a TV screen). Upright on a short phone,
